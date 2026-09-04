@@ -1,0 +1,36 @@
+{
+  "name": "travel-itinerary-planner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "个人旅行行程规划助手 —— 地图可视化 + 时间轴 + 智能路径 + 记账",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dexie": "^4.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.0",
+    "xlsx": "^0.18.5",
+    "zustand": "^4.4.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.1.0",
+    "@testing-library/react": "^14.1.0",
+    "@types/node": "^26.4.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^23.0.0",
+    "typescript": "^5.3.0",
+    "vite": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
+}

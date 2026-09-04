@@ -1,0 +1,27 @@
+# 依赖
+node_modules/
+
+# 环境与密钥(严禁提交)
+.env
+.env.local
+.env.*.local
+
+# 构建产物
+dist/
+build/
+*.tsbuildinfo
+
+# 高德/LLM Key 若误入
+*-key.json
+
+# 系统
+.DS_Store
+npm-debug.log*
+
+# 本地数据库
+*.db
+*.sqlite
+*.sqlite3
+# Python 编译缓存
+__pycache__/
+*.pyc
