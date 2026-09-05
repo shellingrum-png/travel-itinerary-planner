@@ -25,3 +25,6 @@ npm-debug.log*
 # Python 编译缓存
 __pycache__/
 *.pyc
+
+# 后端快照数据(个人数据勿提交)
+server/snapshots/

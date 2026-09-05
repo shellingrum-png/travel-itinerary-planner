@@ -4,11 +4,13 @@ import { db } from '../services/db';
 import type { Trip } from '../types';
 import seedData from '../seed.json';
 import CreateWizard from '../components/CreateWizard';
+import { listBackedUpTrips, restoreTrip, backupTrip } from '../services/sync';
 
 export default function TripList() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [showWizard, setShowWizard] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const navigate = useNavigate();
 
   const load = async () => {
@@ -17,10 +19,43 @@ export default function TripList() {
 
   useEffect(() => {
     load();
+    // 打开时:把本地所有旅程备份到云端(防止换设备丢失)
+    backupAllLocal();
   }, []);
 
+  // 本地旅程都备份到云端
+  const backupAllLocal = async () => {
+    try {
+      const local = await db.listTrips();
+      for (const t of local) await backupTrip(t.id);
+    } catch { /* 静默 */ }
+  };
+
+  // 从云端恢复(换设备/浏览器时):拉取云端有但本地没有的旅程
+  const handleRestoreFromCloud = async () => {
+    setRestoring(true);
+    try {
+      const cloudIds = await listBackedUpTrips();
+      const localIds = new Set((await db.listTrips()).map((t) => t.id));
+      const missing = cloudIds.filter((id) => !localIds.has(id));
+      if (missing.length === 0) {
+        alert('云端没有需要恢复的旅程(都已在本地)。');
+      } else {
+        let ok = 0;
+        for (const id of missing) {
+          const r = await restoreTrip(id);
+          if (r) ok++;
+        }
+        alert(`✅ 已从云端恢复 ${ok}/${missing.length} 个旅程。`);
+        await load();
+      }
+    } catch (e: any) {
+      alert('恢复失败: ' + (e?.message || '请确认后端已启动(start-dev.sh)'));
+    } finally { setRestoring(false); }
+  };
+
   const remove = async (id: string) => {
-    if (!confirm('确定删除此旅程?')) return;
+    if (!confirm('确定删除此旅程?(不会删除云端备份)')) return;
     await db.deleteTrip(id);
     await load();
   };
@@ -86,6 +121,15 @@ export default function TripList() {
         style={{ marginLeft: 8, background: '#1677ff', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 4 }}
       >
         {importing ? '导入中…' : '导入青甘大环线'}
+      </button>
+
+      <button
+        onClick={handleRestoreFromCloud}
+        disabled={restoring}
+        style={{ marginLeft: 8, background: 'rgba(255,255,255,0.1)', color: '#ddd', border: '1px solid #444', padding: '6px 12px', borderRadius: 4 }}
+        title="换设备/浏览器后,从云端拉回旅程"
+      >
+        {restoring ? '恢复中…' : '☁️ 从云端恢复'}
       </button>
 
       {showWizard && <CreateWizard onClose={() => setShowWizard(false)} />}

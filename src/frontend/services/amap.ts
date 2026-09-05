@@ -97,7 +97,7 @@ export async function getDuration(
     return result;
   } catch {
     // 全部失败:返回保守默认值,不阻塞用户
-    const defaults: Record<TransportMode, number> = { walk: 45, drive: 30, transit: 60 };
+    const defaults: Record<TransportMode, number> = { walk: 45, drive: 30, transit: 60, train: 90, flight: 150 };
     return { durationMin: defaults[mode] || 45, distanceM: 0 };
   }
 }

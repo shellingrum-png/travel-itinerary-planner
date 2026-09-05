@@ -6,8 +6,8 @@ import { addMinutes } from '../utils/time';
 import { useOptimize } from './useOptimize';
 import type { ItineraryItem, TransportMode } from '../types';
 
-const TRANSPORT_MODES: TransportMode[] = ['walk', 'drive', 'transit'];
-const MODE_LABELS: Record<TransportMode, string> = { walk: '步行', drive: '驾车', transit: '公交' };
+const TRANSPORT_MODES: TransportMode[] = ['walk', 'drive', 'transit', 'train', 'flight'];
+const MODE_LABELS: Record<TransportMode, string> = { walk: '步行', drive: '驾车', transit: '公交', train: '火车', flight: '飞机' };
 
 export default function DayTimeline() {
   const { id, n } = useParams<{ id: string; n: string }>();
@@ -106,7 +106,7 @@ export default function DayTimeline() {
 
       if (!hasCoords) {
         // 无坐标 → 用默认通勤估算
-        const defaults: Record<TransportMode, number> = { walk: 15, drive: 5, transit: 20 };
+        const defaults: Record<TransportMode, number> = { walk: 15, drive: 5, transit: 20, train: 60, flight: 120 };
         const dur = defaults[mode] || 15;
         await applyCommute(from, to, dur);
         return;
@@ -116,7 +116,7 @@ export default function DayTimeline() {
       await applyCommute(from, to, result.durationMin);
     } catch {
       // 失败用默认值
-      const defaults: Record<TransportMode, number> = { walk: 15, drive: 5, transit: 20 };
+      const defaults: Record<TransportMode, number> = { walk: 15, drive: 5, transit: 20, train: 60, flight: 120 };
       await applyCommute(from, to, defaults[mode] || 15);
     } finally {
       setLoadingRoute(null);

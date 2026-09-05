@@ -46,6 +46,7 @@ export default function TripDetail() {
   const [selectedScenic, setSelectedScenic] = useState<SearchResult | null>(null);
   const [scenicCard, setScenicCard] = useState<PoiAiCard | null>(null);
   const [scenicCardLoading, setScenicCardLoading] = useState(false);
+  const [ticketPrice, setTicketPrice] = useState(''); // V6.2 关联记账:门票价
 
   // 酒店搜索
   const [hotelKeyword, setHotelKeyword] = useState('');
@@ -53,8 +54,10 @@ export default function TripDetail() {
   const [hotelResults, setHotelResults] = useState<SearchResult[]>([]);
   const [hotelLoading, setHotelLoading] = useState(false);
   const [selectedHotel, setSelectedHotel] = useState<SearchResult | null>(null);
+  const [hotelPrice, setHotelPrice] = useState(''); // V6.2 关联记账:房价
 
   // 交通
+  const [transportPrice, setTransportPrice] = useState(''); // V6.2 关联记账:票价
   const [fromResult, setFromResult] = useState<SearchResult | null>(null);
   const [toResult, setToResult] = useState<SearchResult | null>(null);
   const [transportMode, setTransportMode] = useState<TransportMode>('drive');
@@ -144,7 +147,22 @@ export default function TripDetail() {
       summaries.push({ day: d, items: enriched });
     }
     setDaySummaries(summaries);
+    // V6.2:自动备份到云端(防抖,避免每次编辑都请求)
+    scheduleBackup(id);
   }, [id]);
+
+  // ── 自动云备份(防抖) ──
+  const backupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleBackup = useCallback((tripId: string) => {
+    if (backupTimer.current) clearTimeout(backupTimer.current);
+    backupTimer.current = setTimeout(async () => {
+      try {
+        const { backupTrip } = await import('../services/sync');
+        await backupTrip(tripId);
+        console.log('[云备份] 已同步到云端:', tripId.slice(0, 8));
+      } catch { /* 静默失败,不影响主流程 */ }
+    }, 800); // 800ms 防抖
+  }, []);
 
   const ready = !!trip;
 
@@ -192,35 +210,54 @@ export default function TripDetail() {
 
     // 读 ref(最新数据),避免闭包捕获旧值
     const summaries = daySummariesRef.current;
+    // V6.2b:统计坐标重叠,自动错开(避免同点 marker 叠盖)
+    const posCount = new Map<string, number>();     // 坐标 → 总点数
+    const posDone = new Map<string, number>();      // 坐标 → 已处理第几个
+    summaries.forEach((ds) => {
+      ds.items.forEach((it) => {
+        if (it.poi && it.poi.lng !== 0 && it.poi.lat !== 0) {
+          const key = `${it.poi.lng},${it.poi.lat}`;
+          posCount.set(key, (posCount.get(key) || 0) + 1);
+        }
+      });
+    });
+
     summaries.forEach((ds, di) => {
       const color = DAY_COLORS[di % DAY_COLORS.length];
       const path: [number, number][] = [];
+      let seq = 0; // 当天内景点序号
       ds.items.forEach((it) => {
         if (it.poi && it.poi.lng !== 0 && it.poi.lat !== 0) {
+          seq++;
           const pos: [number, number] = [it.poi.lng, it.poi.lat];
-          allPositions.push(pos);
-          path.push(pos);
-
-          // 用 content DOM 标记(最可靠,不依赖图片加载)
+          const key = `${it.poi.lng},${it.poi.lat}`;
+          const total = posCount.get(key) || 0;
+          const idx = (posDone.get(key) || 0) + 1;
+          posDone.set(key, idx);
+          // 若同坐标有多个点:第2+个向下偏移,避免叠盖
+          const off = total > 1 ? new AMap.Pixel(0, idx * 18 - 9) : new AMap.Pixel(-13, -13);
           const marker = new AMap.Marker({
-            position: pos,
-            offset: new AMap.Pixel(-13, -13),
-            content: `<div style="width:26px;height:26px;border-radius:50%;background:${color};border:2px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;box-shadow:0 2px 6px rgba(0,0,0,0.6);">${ds.day.daySeq}</div>`,
+            position: pos, offset: off,
+            content: `<div style="width:26px;height:26px;border-radius:50%;background:${color};border:2px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:11px;box-shadow:0 2px 6px rgba(0,0,0,0.6);">${ds.day.daySeq}-${seq}</div>`,
           });
           marker.on('click', () => {
             new AMap.InfoWindow({
-              content: `<b>Day ${ds.day.daySeq}</b> · ${it.poi!.name}<br/><small>${it.note || ''}</small>`,
+              content: `<div style="color:#222;font-size:13px;font-weight:bold;padding:2px 4px;">Day ${ds.day.daySeq}-${seq} · ${it.poi!.name}</div><div style="color:#555;font-size:12px;padding:2px 4px;">${it.note || ''}</div>`,
               offset: new AMap.Pixel(0, -30),
             }).open(map, pos);
           });
           map.add(marker);
+          allPositions.push(pos);
+          path.push(pos);
         }
       });
 
+      // V6.2:同天相邻景点带箭头连线(方向标识)
       if (path.length >= 2) {
         map.add(new AMap.Polyline({
-          path, strokeColor: color, strokeWeight: 4, strokeOpacity: 0.8,
+          path, strokeColor: color, strokeWeight: 5, strokeOpacity: 0.85,
           lineJoin: 'round', isOutline: true, outlineColor: 'rgba(0,0,0,0.3)', borderWeight: 1,
+          showDir: true, dirColor: color, dirStrokeColor: '#ffffff',
         }));
       }
     });
@@ -261,6 +298,33 @@ export default function TripDetail() {
   const flyTo = (lng: number, lat: number, zoom = 14) => {
     if (!mapRef.current) return;
     mapRef.current.setZoomAndCenter(zoom, [lng, lat]);
+  };
+
+  // V6.2b:聚焦某个景点(左侧列表点击) — 定位 + 高亮标记
+  const focusPoi = async (itemId: string) => {
+    if (!mapRef.current) return;
+    // 找到该 item 的 poi 坐标
+    for (const ds of daySummariesRef.current) {
+      const it = ds.items.find((x) => x.id === itemId);
+      if (it?.poi && it.poi.lng !== 0 && it.poi.lat !== 0) {
+        flyTo(it.poi.lng, it.poi.lat, 14);
+        // 临时高亮:黄色呼吸式描边圈(透明填充,不遮挡编号)
+        clearTempMarker();
+        const AMap = (window as any).AMap;
+        const icon = new AMap.CircleMarker({
+          center: [it.poi.lng, it.poi.lat],
+          radius: 24, fillColor: '#ffd166', fillOpacity: 0.1,
+          strokeColor: '#ffd166', strokeWeight: 5,
+        });
+        mapRef.current.add(icon);
+        tempMarkerRef.current = icon;
+        new AMap.InfoWindow({
+          content: `<div style="color:#222;font-size:14px;font-weight:bold;padding:2px 4px;">${it.poi.name}</div><div style="color:#555;font-size:12px;padding:2px 4px;">${it.note || ''}</div>`,
+          offset: new AMap.Pixel(0, -20),
+        }).open(mapRef.current, [it.poi.lng, it.poi.lat]);
+        return;
+      }
+    }
   };
 
   const setTempMarker = (lng: number, lat: number) => {
@@ -325,19 +389,21 @@ export default function TripDetail() {
     await load();
   };
 
-  // ── 单日行程时长统计(V6.0):路上时间 + 游览时间 ──
+  // ── 单日行程时长统计(V6.2):按距离+交通方式智能计算路上时间 + 游览时间 ──
   const calcDayTiming = (
     ds: { items: (ItineraryItem & { poi?: Poi })[] },
   ): { driveMin: number; visitMin: number } => {
-    // 仅以「相邻有坐标 POI」的直线距离粗算行车(避免逐日调 API),游览=visitMinutes 求和
+    // 按每个节点的 transportMode 决定该段通勤速度
     const pois = ds.items
-      .filter((it) => it.poi && it.poi.lng !== 0 && it.poi.lat !== 0)
-      .map((it) => it.poi!);
+      .filter((it) => it.poi && it.poi.lng !== 0 && it.poi.lat !== 0);
     let driveMin = 0;
     for (let i = 0; i < pois.length - 1; i++) {
-      const a = pois[i]; const b = pois[i + 1];
+      const a = pois[i].poi!; const b = pois[i + 1].poi!;
+      const mode = pois[i + 1].transportMode || 'walk';
       const km = haversineKm(a.lng, a.lat, b.lng, b.lat);
-      driveMin += Math.round((km / 40) * 60); // 城市平均 40km/h 粗估
+      // 智能选速:距离决定合理通勤(跨城 walk 会被强制升到驾车/火车,避免 89h 这类离谱值)
+      const speedKmh = smartTransportSpeed(mode, km);
+      driveMin += Math.round((km / speedKmh) * 60);
     }
     const visitMin = ds.items.reduce((s, it) => s + (it.visitMinutes ?? 0), 0);
     return { driveMin, visitMin };
@@ -345,6 +411,28 @@ export default function TripDetail() {
 
   const fmtMin = (min: number) =>
     min >= 60 ? `${Math.floor(min / 60)}h${min % 60 ? `${min % 60}m` : ''}` : `${min}m`;
+
+  // V6.2 交通方式 → 预估速度(km/h),用于时长粗算
+  const transportSpeedKmh = (mode: TransportMode): number => {
+    switch (mode) {
+      case 'drive': return 60;      // 自驾/打车城区
+      case 'transit': return 30;    // 公交/地铁
+      case 'train': return 250;     // 高铁
+      case 'flight': return 800;    // 飞机
+      default: return 5;            // 步行
+    }
+  };
+
+  // V6.2b:智能选速——按距离修正不合理的交通方式(跨城步行→升为驾车/火车)
+  const smartTransportSpeed = (mode: TransportMode, km: number): number => {
+    // 步行 >15km 不合理,自动升为驾车
+    if (mode === 'walk' && km > 15) return 60;
+    // 驾车 >300km 不合理,自动升为火车
+    if (mode === 'drive' && km > 300) return 250;
+    // 公交 >50km 不合理,升为火车
+    if (mode === 'transit' && km > 50) return 250;
+    return transportSpeedKmh(mode);
+  };
 
   // ── 全局顺路优化(V6.0):跨天防折返 + 全程最短 ──
   // ── 全局顺路优化预览状态 ──
@@ -649,6 +737,12 @@ export default function TripDetail() {
   const handleRemoveItem = async (itemId: string) => {
     if (!confirm('确定删除这个景点？')) return;
     await db.removeItem(itemId);
+    // V6.2 联动:删除关联记账
+    if (id) {
+      const exps = await db.listExpenses(id);
+      const linked = exps.filter((e) => e.refId === itemId);
+      for (const e of linked) await db.removeExpense(e.id);
+    }
     await load();
   };
 
@@ -729,10 +823,22 @@ export default function TripDetail() {
   };
 
   const handleAddScenic = async () => {
-    if (!selectedScenic || !activeDayId) return;
+    if (!selectedScenic || !activeDayId || !id) return;
+    const day = days.find((d) => d.id === activeDayId);
     await db.upsertPoi({ id: selectedScenic.id, name: selectedScenic.name, lng: selectedScenic.lng, lat: selectedScenic.lat, category: 'poi', address: selectedScenic.address });
-    await db.addItem({ dayId: activeDayId, poiId: selectedScenic.id, itemType: 'poi', transportMode: 'walk', note: selectedScenic.name, visitMinutes: scenicCard?.suggestDuration || 90 });
+    const item = await db.addItem({ dayId: activeDayId, poiId: selectedScenic.id, itemType: 'poi', transportMode: 'walk', note: selectedScenic.name, visitMinutes: scenicCard?.suggestDuration || 90 });
+    // V6.2 关联记账:门票价
+    const price = parseFloat(ticketPrice);
+    if (!isNaN(price) && price > 0 && day) {
+      await db.addExpense({
+        tripId: id, category: 'ticket', amount: price,
+        currency: trip?.currency ?? 'CNY', date: day.date,
+        note: `门票 · ${selectedScenic.name}`,
+        refType: 'itinerary_item', refId: item.id, dayId: activeDayId,
+      });
+    }
     setSelectedScenic(null); setScenicCard(null); setScenicResults([]); setScenicKeyword('');
+    setTicketPrice('');
     clearTempMarker(); await load();
   };
 
@@ -755,9 +861,20 @@ export default function TripDetail() {
     const day = days.find((d) => d.id === activeDayId);
     if (!day) return;
     await db.upsertPoi({ id: selectedHotel.id, name: selectedHotel.name, lng: selectedHotel.lng, lat: selectedHotel.lat, category: 'hotel', address: selectedHotel.address });
-    await db.addItem({ dayId: activeDayId, poiId: selectedHotel.id, itemType: 'hotel', transportMode: 'walk', note: selectedHotel.name, visitMinutes: 0 });
+    const item = await db.addItem({ dayId: activeDayId, poiId: selectedHotel.id, itemType: 'hotel', transportMode: 'walk', note: selectedHotel.name, visitMinutes: 0 });
     await db.addHotel({ tripId: id, name: selectedHotel.name, address: selectedHotel.address, lng: selectedHotel.lng, lat: selectedHotel.lat, checkIn: day.date, checkOut: day.date, poiId: selectedHotel.id });
+    // V6.2 关联记账:房价
+    const price = parseFloat(hotelPrice);
+    if (!isNaN(price) && price > 0) {
+      await db.addExpense({
+        tripId: id, category: 'hotel', amount: price,
+        currency: trip?.currency ?? 'CNY', date: day.date,
+        note: `住宿 · ${selectedHotel.name}`,
+        refType: 'itinerary_item', refId: item.id, dayId: activeDayId,
+      });
+    }
     setSelectedHotel(null); setHotelResults([]); setHotelKeyword('');
+    setHotelPrice('');
     clearTempMarker(); await load();
   };
 
@@ -777,16 +894,37 @@ export default function TripDetail() {
   const handleQueryRoute = async () => {
     if (!fromResult || !toResult) return;
     setRouteLoading(true);
-    try { setRouteInfo(await getDuration([fromResult.lng, fromResult.lat], [toResult.lng, toResult.lat], transportMode)); }
-    catch (e: any) { alert('路线查询失败: ' + e.message); }
+    try {
+      // V6.2:火车/飞机用直线粗估,不调高德(跨城路线高德算不了)
+      if (transportMode === 'train' || transportMode === 'flight') {
+        const km = haversineKm(fromResult.lng, fromResult.lat, toResult.lng, toResult.lat);
+        const speedKmh = transportSpeedKmh(transportMode);
+        setRouteInfo({ durationMin: Math.round((km / speedKmh) * 60), distanceM: Math.round(km * 1000) });
+      } else {
+        setRouteInfo(await getDuration([fromResult.lng, fromResult.lat], [toResult.lng, toResult.lat], transportMode));
+      }
+    } catch (e: any) { alert('路线查询失败: ' + e.message); }
     finally { setRouteLoading(false); }
   };
 
   const handleAddTransport = async () => {
-    if (!fromResult || !toResult || !activeDayId) return;
+    if (!fromResult || !toResult || !activeDayId || !id) return;
+    const day = days.find((d) => d.id === activeDayId);
     await db.upsertPoi({ id: fromResult.id, name: fromResult.name, lng: fromResult.lng, lat: fromResult.lat, category: 'poi' });
-    await db.addItem({ dayId: activeDayId, poiId: fromResult.id, itemType: 'poi', transportMode, note: `${fromResult.name} → ${toResult.name}`, visitMinutes: 0 });
-    setFromResult(null); setToResult(null); setRouteInfo(null); clearTempMarker(); await load();
+    const item = await db.addItem({ dayId: activeDayId, poiId: fromResult.id, itemType: 'poi', transportMode, note: `${fromResult.name} → ${toResult.name}`, visitMinutes: 0 });
+    // V6.2 关联记账:票价
+    const price = parseFloat(transportPrice);
+    if (!isNaN(price) && price > 0 && day) {
+      await db.addExpense({
+        tripId: id, category: 'transport', amount: price,
+        currency: trip?.currency ?? 'CNY', date: day.date,
+        note: `交通 · ${fromResult.name} → ${toResult.name}`,
+        refType: 'itinerary_item', refId: item.id, dayId: activeDayId,
+      });
+    }
+    setFromResult(null); setToResult(null); setRouteInfo(null);
+    setTransportPrice('');
+    clearTempMarker(); await load();
   };
 
   const globalOptimizing = useState(false)[0];
@@ -896,16 +1034,13 @@ export default function TripDetail() {
             <div key={d.id} style={{ marginBottom: 8 }}>
               <div
                 onClick={() => {
-                  const newDet = !detOpen;
-                  if (newDet && detOpen !== edtOpen) {
+                  // V6.2b:主体点击只「展开」行程明细(收起交给右上角收起按钮),避免点景点误收起
+                  if (!detOpen) {
                     setDetailExpanded({ ...detailExpanded, [d.id]: true });
                     setEditExpanded({ ...editExpanded, [d.id]: false });
-                  } else {
-                    setDetailExpanded({ ...detailExpanded, [d.id]: !detOpen });
-                    if (detOpen && edtOpen) { /* keep editing open when clicking again */ }
-                  }
-                  if (ds && ds.items.length > 0 && ds.items[0].poi && mapRef.current) {
-                    flyTo(ds.items[0].poi.lng, ds.items[0].poi.lat, 10);
+                    if (ds && ds.items.length > 0 && ds.items[0].poi && mapRef.current) {
+                      flyTo(ds.items[0].poi.lng, ds.items[0].poi.lat, 10);
+                    }
                   }
                 }}
                 style={{
@@ -921,12 +1056,22 @@ export default function TripDetail() {
                     <div style={{ fontSize: 13, fontWeight: 600, marginTop: 2 }}>{names.join(' → ') || '自由日'}</div>
                     <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{names.length} 个地点</div>
                   </div>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setActiveDayId(d.id); setActiveTab('scenic'); setDetailExpanded(prev => ({ ...prev, [d.id]: false })); setEditExpanded(prev => ({ ...prev, [d.id]: !prev[d.id] })); }}
-                    style={{ background: '#1677ff', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}
-                  >
-                    + 添加
-                  </button>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {/* V6.2b:独立的收起/展开按钮 */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setDetailExpanded(prev => ({ ...prev, [d.id]: !detOpen })); }}
+                      title={detOpen ? '收起当日行程' : '展开当日行程'}
+                      style={{ background: 'rgba(255,255,255,0.12)', color: '#ddd', border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
+                    >
+                      {detOpen ? '▲ 收起' : '▼ 展开'}
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setActiveDayId(d.id); setActiveTab('scenic'); setDetailExpanded(prev => ({ ...prev, [d.id]: false })); setEditExpanded(prev => ({ ...prev, [d.id]: !prev[d.id] })); }}
+                      style={{ background: '#1677ff', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}
+                    >
+                      + 添加
+                    </button>
+                  </div>
                 </div>
 
                 {/* 行程明细（展开时） */}
@@ -947,7 +1092,11 @@ export default function TripDetail() {
                         <div style={{ margin: 0 }}>
                           {ds!.items.map((it, idx) => (
                             <div key={it.id} style={{ fontSize: 13, padding: '6px 0', borderBottom: idx < ds!.items.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                              <div style={{ flex: 1, overflow: 'hidden' }}>
+                              <div
+                                style={{ flex: 1, overflow: 'hidden', cursor: it.poi ? 'pointer' : 'default' }}
+                                onClick={(e) => { e.stopPropagation(); it.poi && focusPoi(it.id); }}
+                                title={it.poi ? '点击地图定位' : ''}
+                              >
                                 <span style={{ color: '#888' }}>{idx + 1}.</span>{' '}
                                 <strong>{it.poi?.name || it.note || it.itemType}</strong>
                                 {it.visitMinutes != null && it.visitMinutes > 0 && <span style={{ color: '#888', fontSize: 11 }}> · {it.visitMinutes}min</span>}
@@ -1019,9 +1168,13 @@ export default function TripDetail() {
                           <div style={{ fontSize: 12, color: '#aaa', marginBottom: 8 }}>{selectedScenic.address} · {selectedScenic.lng.toFixed(4)}, {selectedScenic.lat.toFixed(4)}</div>
                           {scenicCardLoading ? <div style={{ fontSize: 12, color: '#888' }}>正在生成 AI 卡片…</div>
                             : scenicCard && <div style={{ fontSize: 12, marginBottom: 8 }}><div style={{ color: '#ffd166' }}>⭐ {scenicCard.rating} · {scenicCard.suggestDuration} min</div><div>{scenicCard.recommendReason}</div></div>}
+                          {/* V6.2 关联记账:门票价 */}
+                          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                            <input type="number" placeholder="门票价(选填)" value={ticketPrice} onChange={(e) => setTicketPrice(e.target.value)} style={{ ...inp, width: '40%' }} />
+                          </div>
                           <div style={{ display: 'flex', gap: 8 }}>
                             <button style={btn()} onClick={handleAddScenic}>添加到 Day {d.daySeq}</button>
-                            <button onClick={() => { setSelectedScenic(null); setScenicCard(null); clearTempMarker(); }} style={{ ...btn('rgba(255,255,255,0.15)') }}>重新选择</button>
+                            <button onClick={() => { setSelectedScenic(null); setScenicCard(null); setTicketPrice(''); clearTempMarker(); }} style={{ ...btn('rgba(255,255,255,0.15)') }}>重新选择</button>
                           </div>
                         </div>
                       )}
@@ -1049,9 +1202,13 @@ export default function TripDetail() {
                         <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 8, padding: 12, marginTop: 8 }}>
                           <div style={{ fontWeight: 'bold', marginBottom: 4 }}>{selectedHotel.name}</div>
                           <div style={{ fontSize: 12, color: '#aaa', marginBottom: 8 }}>{selectedHotel.address}</div>
+                          {/* V6.2 关联记账:房价 */}
+                          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                            <input type="number" placeholder="房价/晚(选填)" value={hotelPrice} onChange={(e) => setHotelPrice(e.target.value)} style={{ ...inp, width: '40%' }} />
+                          </div>
                           <div style={{ display: 'flex', gap: 8 }}>
                             <button style={btn()} onClick={handleAddHotel}>添加到 Day {d.daySeq}</button>
-                            <button onClick={() => { setSelectedHotel(null); clearTempMarker(); }} style={{ ...btn('rgba(255,255,255,0.15)') }}>重新选择</button>
+                            <button onClick={() => { setSelectedHotel(null); setHotelPrice(''); clearTempMarker(); }} style={{ ...btn('rgba(255,255,255,0.15)') }}>重新选择</button>
                           </div>
                         </div>
                       )}
@@ -1072,9 +1229,9 @@ export default function TripDetail() {
                         {toResult && <div style={{ fontSize: 11, color: '#06d6a0', marginTop: 2 }}>已选: {toResult.name}</div>}
                       </div>
                       <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                        {(['walk', 'drive', 'transit'] as TransportMode[]).map((m) => (
+                        {(['walk', 'drive', 'transit', 'train', 'flight'] as TransportMode[]).map((m) => (
                           <button key={m} onClick={() => setTransportMode(m)} style={{ flex: 1, padding: '6px 0', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: transportMode === m ? '#1677ff' : 'rgba(255,255,255,0.08)', color: transportMode === m ? '#fff' : '#aaa' }}>
-                            {m === 'walk' ? '步行' : m === 'drive' ? '驾车' : '公交'}
+                            {m === 'walk' ? '步行' : m === 'drive' ? '驾车' : m === 'transit' ? '公交' : m === 'train' ? '火车' : '飞机'}
                           </button>
                         ))}
                       </div>
@@ -1084,11 +1241,15 @@ export default function TripDetail() {
                       {routeInfo && (
                         <div style={{ background: 'rgba(6,214,160,0.1)', borderRadius: 8, padding: 12, marginTop: 8 }}>
                           <div style={{ color: '#06d6a0', fontWeight: 'bold' }}>
-                            {transportMode === 'walk' ? '步行' : transportMode === 'drive' ? '驾车' : '公交'} · {routeInfo.durationMin} min · {(routeInfo.distanceM / 1000).toFixed(1)} km
+                            {transportMode === 'walk' ? '步行' : transportMode === 'drive' ? '驾车' : transportMode === 'transit' ? '公交' : transportMode === 'train' ? '火车' : '飞机'} · {routeInfo.durationMin} min · {(routeInfo.distanceM / 1000).toFixed(1)} km
+                          </div>
+                          {/* V6.2 关联记账:票价 */}
+                          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                            <input type="number" placeholder="票价(选填)" value={transportPrice} onChange={(e) => setTransportPrice(e.target.value)} style={{ ...inp, width: '40%' }} />
                           </div>
                           <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                             <button style={btn()} onClick={handleAddTransport}>添加到 Day {d.daySeq}</button>
-                            <button onClick={() => { setRouteInfo(null); }} style={{ ...btn('rgba(255,255,255,0.15)') }}>取消</button>
+                            <button onClick={() => { setRouteInfo(null); setTransportPrice(''); }} style={{ ...btn('rgba(255,255,255,0.15)') }}>取消</button>
                           </div>
                         </div>
                       )}

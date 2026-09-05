@@ -66,7 +66,8 @@ export interface PoiAiCard {
 }
 
 export type ItemType = 'poi' | 'transport' | 'hotel' | 'buffer';
-export type TransportMode = 'walk' | 'drive' | 'transit';
+// V6.2 交通方式扩展:walk/drive/transit(城内) + train/flight(城际)
+export type TransportMode = 'walk' | 'drive' | 'transit' | 'train' | 'flight';
 
 // 单日时间轴节点
 export interface ItineraryItem {
@@ -130,6 +131,9 @@ export interface Expense {
   date?: string;
   note?: string;
   dirty: 0 | 1; // 离线待同步
+  refType?: string; // V6.2 关联对象类型: poi | hotel | transport | itinerary_item
+  refId?: string;   // V6.2 关联对象 id
+  dayId?: string;   // V6.2 关联日程天 id
 }
 
 // 路径规划缓存
