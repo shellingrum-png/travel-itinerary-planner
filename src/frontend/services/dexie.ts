@@ -193,6 +193,38 @@ class TravelDb extends Dexie implements Db {
     });
   }
 
+  /** V6.2 拖拽:跨天移动(更新 item 的 dayId,再重排两边 orderSeq) */
+  async moveItemAcrossDays(itemId: string, targetDayId: string, targetOrder: number): Promise<void> {
+    await this.transaction('rw', this.itineraryItems, async () => {
+      const item = await this.itineraryItems.get(itemId);
+      if (!item) return;
+      const srcDayId = item.dayId;
+
+      // 1) 先把 item 的 dayId 改为目标天(这一步不能删,否则记录丢失)
+      await this.itineraryItems.update(itemId, { dayId: targetDayId });
+
+      // 2) 原天(非目标天)orderSeq 前移
+      if (srcDayId !== targetDayId) {
+        const srcItems = await this.itineraryItems.where({ dayId: srcDayId }).sortBy('orderSeq');
+        for (let i = 0; i < srcItems.length; i++) {
+          if (srcItems[i].orderSeq !== i) await this.itineraryItems.update(srcItems[i].id, { orderSeq: i });
+        }
+      }
+
+      // 3) 目标天:先按当前 orderSeq 取全部,再按 targetOrder 重排
+      const dstItems = await this.itineraryItems.where({ dayId: targetDayId }).sortBy('orderSeq');
+      const idx = dstItems.findIndex((it) => it.id === itemId);
+      if (idx !== -1) {
+        const [moved] = dstItems.splice(idx, 1);
+        const order = Math.max(0, Math.min(targetOrder, dstItems.length));
+        dstItems.splice(order, 0, moved);
+      }
+      for (let i = 0; i < dstItems.length; i++) {
+        if (dstItems[i].orderSeq !== i) await this.itineraryItems.update(dstItems[i].id, { orderSeq: i });
+      }
+    });
+  }
+
   async removeItem(id: string): Promise<void> {
     await this.itineraryItems.delete(id);
   }

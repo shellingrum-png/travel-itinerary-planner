@@ -1,0 +1,80 @@
+/* ── 全局暗色主题基础样式 ── */
+:root {
+  /* 色板(语义化,设计token) */
+  --c-bg: #12121f;
+  --c-bg-panel: #1d1d30;
+  --c-bg-card: rgba(255, 255, 255, 0.04);
+  --c-bg-card-hover: rgba(255, 255, 255, 0.08);
+  --c-border: rgba(255, 255, 255, 0.1);
+  --c-border-strong: rgba(255, 255, 255, 0.16);
+  --c-text: #e8e8f0;
+  --c-text-sub: #9a9ab0;
+  --c-text-muted: #6b6b82;
+
+  --c-primary: #1677ff;
+  --c-primary-hover: #3d8bff;
+  --c-success: #06d6a0;
+  --c-warning: #ffd166;
+  --c-danger: #ff6b6b;
+  --c-info: #7eb8e0;
+
+  /* 间距 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+
+  /* 圆角 */
+  --rd-sm: 6px;
+  --rd-md: 8px;
+  --rd-lg: 12px;
+
+  /* 字体 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* 输入框/按钮通用光感 */
+input,
+select,
+textarea {
+  font-family: inherit;
+  color: inherit;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--c-text-muted);
+}

@@ -3,9 +3,11 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { db } from '../services/db';
 import { useOnlineStatus } from '../utils/useOnlineStatus';
 import { solveTsp, savings, solveOpenPath, haversineKm } from '../utils/tsp';
-import { getDuration, searchPoiByJS } from '../services/amap';
+import { getDuration, searchPoiByJS, reverseGeocode, getDrivingPath } from '../services/amap';
 import { getPoiCard } from '../services/llm';
 import { loadAMap } from '../services/amapLoader';
+import { optimizeItinerary } from '../services/itineraryEngine';
+import type { ItineraryPoi, DayAnchor } from '../services/itineraryEngine';
 import TripPreview from '../components/TripPreview';
 import type { Trip, ItineraryDay, ItineraryItem, Poi, PoiAiCard, Hotel, TransportMode } from '../types';
 
@@ -63,6 +65,10 @@ export default function TripDetail() {
   const [transportMode, setTransportMode] = useState<TransportMode>('drive');
   const [routeInfo, setRouteInfo] = useState<{ durationMin: number; distanceM: number } | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
+
+  // V6.2 拖拽排序:当前拖拽的 item / 悬停目标(来源天id|itemId → 目标天id)
+  const [dragItem, setDragItem] = useState<{ itemId: string; fromDayId: string } | null>(null);
+  const [dragOverDayId, setDragOverDayId] = useState<string | null>(null);
 
   // ── 地图 ──
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -444,151 +450,196 @@ export default function TripDetail() {
 
   // ── 全局优化:起点终点选择 ──
   const [optimizeSetup, setOptimizeSetup] = useState<{
-    // 每天酒店锚点(固定,不参与重排)
-    dayHotels: Array<{ daySeq: number; dayId: string; hotel: Poi; name: string }>;
-    // 所有景点
-    all: Array<{ poi: Poi; daySeq: number; itemId: string }>;
-    startIdx: number; // 起点=某天酒店 在 dayHotels 的索引
-    endIdx: number;   // 终点=某天酒店 在 dayHotels 的索引
+    // 引擎输入:每天锚点骨架 + 全部景点(带城市)
+    days: DayAnchor[];
+    pois: ItineraryPoi[];
+    startIdx: number; // 起点=某天锚点 在 days 的索引
+    endIdx: number;   // 终点=某天锚点 在 days 的索引
   } | null>(null);
 
-  /** 提取每天酒店锚点(有坐标的那个) */
-  const getDayHotels = () => {
-    const hotels: Array<{ daySeq: number; dayId: string; hotel: Poi; name: string }> = [];
+  /** 提取每天锚点:优先酒店,无酒店用当天第一个有坐标景点;返回引擎 DayAnchor */
+  const getDayAnchors = (): DayAnchor[] => {
+    const anchors: DayAnchor[] = [];
     for (const ds of daySummaries) {
       const hotelItem = ds.items.find((it) => it.itemType === 'hotel' && it.poi && it.poi.lng !== 0 && it.poi.lat !== 0);
-      if (hotelItem && hotelItem.poi) {
-        hotels.push({ daySeq: ds.day.daySeq, dayId: ds.day.id, hotel: hotelItem.poi, name: hotelItem.poi.name });
+      if (hotelItem?.poi) {
+        anchors.push({ daySeq: ds.day.daySeq, dayId: ds.day.id, poi: hotelItem.poi, fromHotel: true, city: hotelItem.poi.city });
+      } else {
+        const poiItem = ds.items.find((it) => it.itemType !== 'hotel' && it.poi && it.poi.lng !== 0 && it.poi.lat !== 0);
+        if (poiItem?.poi) {
+          anchors.push({ daySeq: ds.day.daySeq, dayId: ds.day.id, poi: poiItem.poi, fromHotel: false, city: poiItem.poi.city });
+        }
       }
     }
-    return hotels;
+    return anchors;
+  };
+
+  /** 清洗景点名用于搜索:去括号/去噪音词 */
+  const cleanPoiName = (name: string): string => {
+    let n = name
+      .replace(/[（(].*?[)）]/g, '')      // 去括号内容
+      .replace(/抵达|睡到自然醒|出发|看日落|拍照|吃瓜|骑骆驼/g, '')
+      .replace(/^[\s·+]+|[\s·+]+$/g, '')
+      .split(/[+＋]/)[0]                  // 复合名取第一个(如"黑独山+胭脂山"取"黑独山")
+      .trim();
+    if (!n && name) n = name.split(/[+＋]/)[0].trim();
+    return n;
+  };
+
+  /** 逆地理纠错 + 按名重查坐标:绑定城市,坐标偏差>50km 自动修正(优先一次,已 fixed 跳过) */
+  const enrichPoiCities = async (pois: Array<{ poi: Poi; daySeq: number; itemId: string }>): Promise<void> => {
+    const toFix = pois.filter((p) => !p.poi.fixed);
+    if (toFix.length === 0) return;
+    // 并发(限 5,防高德频控)
+    const BATCH = 5;
+    for (let b = 0; b < toFix.length; b += BATCH) {
+      const batch = toFix.slice(b, b + BATCH);
+      await Promise.all(batch.map(async (p) => {
+        const fixedPoi = { ...p.poi, fixed: true as const };
+        try {
+          // 1) 按名字重查坐标:与当前偏差>50km → 修正
+          const keyword = cleanPoiName(p.poi.name);
+          let lng = p.poi.lng, lat = p.poi.lat;
+          if (keyword) {
+            const results = await searchPoiByJS(keyword);
+            const hit = results.find((r) => r.lng !== 0 && r.lat !== 0);
+            if (hit) {
+              const dev = haversineKm(p.poi.lng, p.poi.lat, hit.lng, hit.lat);
+              if (dev > 50) {
+                lng = hit.lng; lat = hit.lat;
+                fixedPoi.lng = lng; fixedPoi.lat = lat;
+                fixedPoi.address = hit.address || fixedPoi.address;
+              }
+            }
+          }
+          // 2) 逆地理绑定城市(用修正后坐标)
+          const city = await reverseGeocode(lng, lat);
+          if (city) fixedPoi.city = city;
+        } catch { /* 保底:标记 fixed 避免重复 */ }
+        await db.upsertPoi(fixedPoi).catch(() => {});
+      }));
+    }
   };
 
   /** 打开起点终点选择面板 */
   const handleGlobalOptimize = async () => {
     if (!id) return;
-    const dayHotels = getDayHotels();
-    if (dayHotels.length < 2) {
-      alert('需要有至少 2 天带坐标的酒店作为起点/终点锚点。\n请先在行程中为每天添加酒店(带地图坐标)。');
+    const dayAnchors = getDayAnchors();
+    if (dayAnchors.length < 2) {
+      alert('需要有至少 2 天包含景点(或酒店)作为起点/终点锚点。\n请先在行程中为至少 2 天添加带坐标的景点或酒店。');
       return;
     }
-    const all: Array<{ poi: Poi; daySeq: number; itemId: string }> = [];
+    // 收集所有景点
+    const rawPois: Array<{ poi: Poi; daySeq: number; itemId: string }> = [];
     for (const ds of daySummaries) {
       for (const it of ds.items) {
         if (it.itemType !== 'hotel' && it.poi && it.poi.lng !== 0 && it.poi.lat !== 0) {
-          all.push({ poi: it.poi, daySeq: ds.day.daySeq, itemId: it.id });
+          rawPois.push({ poi: it.poi, daySeq: ds.day.daySeq, itemId: it.id });
         }
       }
     }
-    if (all.length < 2) {
-      alert(`当前只有 ${all.length} 个带坐标的景点(需≥2)。\n请先在行程中添加景点,或检查景点坐标是否有效。`);
+    if (rawPois.length < 2) {
+      alert(`当前只有 ${rawPois.length} 个带坐标的景点(需≥2)。\n请先在行程中添加景点,或检查景点坐标是否有效。`);
       return;
     }
-    // 默认:起点=第一天酒店,终点=最后一天酒店
-    setOptimizeSetup({ dayHotels, all, startIdx: 0, endIdx: dayHotels.length - 1 });
+    // 逆地理纠错(异步,不阻塞)
+    await enrichPoiCities(rawPois);
+    // 重新加载(纠错后 poi 有 city)
+    const reloaded: ItineraryPoi[] = [];
+    for (const rp of rawPois) {
+      const fresh = await db.getPoi(rp.poi.id);
+      reloaded.push({ id: rp.poi.id, poi: fresh ?? rp.poi, city: fresh?.city ?? rp.poi.city, srcDaySeq: rp.daySeq });
+    }
+    // 默认:起点=第一天锚点,终点=最后一天锚点
+    setOptimizeSetup({ days: dayAnchors, pois: reloaded, startIdx: 0, endIdx: dayAnchors.length - 1 });
   };
 
-  /** 基于选定的起点终点计算优化预览 */
+  /** 基于选定的起点终点计算优化预览(引擎:城市硬约束+连住平摊) */
   const computeOptimizePreview = async () => {
     if (!optimizeSetup) return;
-    const { dayHotels, all, startIdx, endIdx } = optimizeSetup;
-    if (startIdx === endIdx) { alert('起点和终点酒店不能相同'); return; }
-    if (startIdx < 0 || endIdx < 0 || startIdx >= dayHotels.length || endIdx >= dayHotels.length) { alert('请选择有效的起点/终点酒店'); return; }
+    const { days, pois, startIdx, endIdx } = optimizeSetup;
+    if (startIdx === endIdx) { alert('起点和终点天不能相同'); return; }
+    if (startIdx < 0 || endIdx < 0 || startIdx >= days.length || endIdx >= days.length) { alert('请选择有效的起点/终点天'); return; }
 
     try {
-      const startHotel = dayHotels[startIdx].hotel; // 起点=第一晚酒店
-      const endHotel = dayHotels[endIdx].hotel;     // 终点=最后一晚酒店
-      if (all.length < 2) { alert('景点不足,无需优化'); return; }
+      const startDay = days[startIdx].daySeq;
+      const endDay = days[endIdx].daySeq;
+      const startMark = days[startIdx].fromHotel ? '🏨' : '📍';
+      const endMark = days[endIdx].fromHotel ? '🏨' : '📍';
 
-      const d2m = (a: Poi, b: Poi) => Math.max(8, Math.round((haversineKm(a.lng, a.lat, b.lng, b.lat) / 40) * 60));
-
-      // 求各景点「到各天酒店」的距离,用于归属:景点归到最近的那天酒店
-      const hotelByDay = new Map<number, Poi>(); // daySeq → hotel poi
-      for (const dh of dayHotels) hotelByDay.set(dh.daySeq, dh.hotel);
-      const nearestDay = (poi: Poi): number => {
-        let best = Infinity, bestDay = 0;
-        for (const dh of dayHotels) {
-          const dist = haversineKm(poi.lng, poi.lat, dh.hotel.lng, dh.hotel.lat);
-          if (dist < best) { best = dist; bestDay = dh.daySeq; }
-        }
-        return bestDay;
-      };
-
-      // 构建从「起点酒店」出发、经过所有景点、抵达「终点酒店」的最短开放路径
-      // 0=起点酒店, 1..m=景点, m+1=终点酒店
-      const m = all.length;
-      const getPoi = (i: number): Poi => {
-        if (i === 0) return startHotel;
-        if (i === m + 1) return endHotel;
-        return all[i - 1].poi;
-      };
-      const duration = (i: number, j: number) => i === j ? 0 : d2m(getPoi(i), getPoi(j));
-      const midResult = solveOpenPath({ count: m + 1, duration: (i: number, j: number) => {
-        if (i === j) return 0;
-        const a = i === 0 ? startHotel : all[i - 1].poi;
-        const b = j === 0 ? startHotel : all[j - 1].poi;
-        return d2m(a, b);
-      }});
-      const midOrder = midResult.order; // 景点相对索引 [0..m-1]
-
-      // 完整链(物理索引:0=起点酒店, 1..m=景点, m+1=终点酒店)
-      const bestChain: number[] = [0, ...midOrder.map((o) => o + 1), m + 1];
-
-      // 当前链 = 起点酒店 → 按 daySeq 排的景点 → 终点酒店(用于对比耗时)
-      const curKey = all.map((_, i) => i + 1);
-      const chainMin = (ch: number[]) => {
-        let s = 0;
-        for (let k = 0; k < ch.length - 1; k++) s += duration(ch[k], ch[k + 1]);
-        return s;
-      };
-      const curMin = chainMin([0, ...curKey, m + 1]);
-      const optMin = chainMin(bestChain);
-      const saved = Math.max(0, curMin - optMin);
-      const sameOrder = bestChain.join('|') === [0, ...curKey, m + 1].join('|');
-
-      if (sameOrder || saved < 15) {
-        alert(`当前行程已按顺路排列(起点「${startHotel.name}」→「${endHotel.name}」),未发现明显折返。`);
-        return;
-      }
-
-      // 归属:按最优链顺序,每个景点归到「最近的那天酒店」
-      // 但要保证:① 起点酒店所在天 ② 终点酒店所在天 各自原来的景点不动
-      const startDaySeq = startHotel ? nearestDay(startHotel) : 0;
-      const endDaySeq = endHotel ? nearestDay(endHotel) : 0;
-      const startDay = dayHotels[startIdx].daySeq;
-      const endDay = dayHotels[endIdx].daySeq;
-
-      // 最优链中间段(景点),按顺序落到各天:起点天之后的每个有酒店的天
-      const middleOrdered = bestChain.slice(1, -1).map((idx) => all[idx - 1]);
-      const middleDaySeqs = dayHotels
-        .filter((dh) => dh.daySeq > startDay && dh.daySeq < endDay)
-        .map((dh) => dh.daySeq);
-
-      // 把中间景点按「最近酒店」归属到天,再保证每天内顺序=最优链顺序
-      const assign: Array<{ item: { poi: Poi; daySeq: number; itemId: string }, targetDaySeq: number }> = [];
-      for (const item of middleOrdered) {
-        assign.push({ item, targetDaySeq: nearestDay(item.poi) });
-      }
-
-      // 移动清单:那些 targetDay 与原 daySeq 不同的
-      const moves: Array<{ poiName: string; fromDay: number; toDay: number }> = [];
-      for (const a of assign) {
-        if (a.item.daySeq !== a.targetDaySeq) {
-          moves.push({ poiName: a.item.poi.name, fromDay: a.item.daySeq, toDay: a.targetDaySeq });
+      // V6.3 第4步:过渡日(换城市的天)获取驾车路径,供引擎做顺路校验
+      const transitionRoutes: Record<number, [number, number][]> = {};
+      const anchorByDay = new Map<number, Poi>();
+      days.forEach((d) => anchorByDay.set(d.daySeq, d.poi));
+      const sortedDays = days.map((d) => d.daySeq).sort((a, b) => a - b);
+      for (let i = 1; i < sortedDays.length; i++) {
+        const prev = anchorByDay.get(sortedDays[i - 1]);
+        const cur = anchorByDay.get(sortedDays[i]);
+        if (prev && cur) {
+          // 换城市的天(距离>80km 视为过渡日) → 调驾车路径
+          const dist = haversineKm(prev.lng, prev.lat, cur.lng, cur.lat);
+          if (dist > 80) {
+            transitionRoutes[sortedDays[i]] = await getDrivingPath([prev.lng, prev.lat], [cur.lng, cur.lat]);
+          }
         }
       }
 
-      setOptimizePreview({
-        savedMin: saved,
-        moves,
-        chain: bestChain.map((idx, pos) => {
-          if (idx === 0) return { name: `🏨${startHotel.name}`, day: startDay };
-          if (idx === m + 1) return { name: `🏨${endHotel.name}`, day: endDay };
-          const item = all[idx - 1];
-          const tDir = nearestDay(item.poi);
-          return { name: item.poi.name, day: tDir };
-        }),
+      // 调引擎:城市硬约束 + 连住平摊(每日≤2) + 过渡日顺路校验
+      const result = optimizeItinerary({
+        days,
+        pois,
+        maxPerDay: 2,
+        transitionRoutes,
+        routeDeviationKm: 30,
       });
+
+      // 收集未分配警告
+      if (result.unassigned.length > 0) {
+        const names = result.unassigned.slice(0, 3).map((u) => `「${u.name}」`).join('');
+        alert(`⚠️ 部分景点无法分配:${names}${result.unassigned.length > 3 ? ` 等${result.unassigned.length}个` : ''}\n请检查这些景点的城市归属或坐标。`);
+      }
+
+      // 构建移动清单:对比原 daySeq 与优化后 daySeq
+      const moves: Array<{ poiName: string; fromDay: number; toDay: number }> = [];
+      for (const a of result.assignments) {
+        const p = pois.find((x) => x.id === a.poiId);
+        if (!p) continue;
+        if (p.srcDaySeq !== a.daySeq) {
+          moves.push({ poiName: p.poi.name, fromDay: p.srcDaySeq, toDay: a.daySeq });
+        }
+      }
+
+      // 估算节省:当前锚点距离 vs 优化后锚点距离
+      const d2m = (a: Poi, b: Poi) => Math.max(8, Math.round((haversineKm(a.lng, a.lat, b.lng, b.lat) / 40) * 60));
+      const dayDistance = (poi: Poi, daySeq: number) => {
+        const a = anchorByDay.get(daySeq);
+        return a ? d2m(a, poi) : 0;
+      };
+      const curDist = pois.reduce((s, p) => s + dayDistance(p.poi, p.srcDaySeq), 0);
+      const optDist = result.assignments.reduce((s, a) => {
+        const p = pois.find((x) => x.id === a.poiId);
+        return s + (p ? dayDistance(p.poi, a.daySeq) : 0);
+      }, 0);
+      const saved = Math.max(0, curDist - optDist);
+
+      // 构建 chain:起点 → 各天景点 → 终点
+      const byDay = new Map<number, string[]>();
+      result.assignments.forEach((a) => {
+        const p = pois.find((x) => x.id === a.poiId);
+        if (p) {
+          const arr = byDay.get(a.daySeq) ?? [];
+          arr.push(p.poi.name);
+          byDay.set(a.daySeq, arr);
+        }
+      });
+      const chain: Array<{ name: string; day: number }> = [];
+      sortedDays.forEach((ds) => {
+        if (ds === startDay) chain.push({ name: `${startMark}${days[startIdx].poi.name}`, day: ds });
+        (byDay.get(ds) || []).forEach((n) => chain.push({ name: n, day: ds }));
+        if (ds === endDay) chain.push({ name: `${endMark}${days[endIdx].poi.name}`, day: ds });
+      });
+
+      setOptimizePreview({ savedMin: saved, moves, chain });
       setOptimizeSetup(null);
     } catch (e: any) {
       console.error('优化计算出错:', e);
@@ -744,6 +795,46 @@ export default function TripDetail() {
       for (const e of linked) await db.removeExpense(e.id);
     }
     await load();
+  };
+
+  // ── V6.2b 拖拽排序 ──
+  const handleDragStart = (itemId: string, fromDayId: string) => (e: React.DragEvent) => {
+    e.dataTransfer.setData('text/plain', itemId);
+    e.dataTransfer.effectAllowed = 'move';
+    setDragItem({ itemId, fromDayId });
+  };
+
+  const handleDragOver = (dayId: string) => (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverDayId(dayId);
+  };
+
+  const handleDragLeave = () => {
+    setDragOverDayId(null);
+  };
+
+  // 放置:移动 item 到目标天(同天=排序,跨天=换天)
+  const handleDrop = (targetDayId: string, targetOrder: number) => async (e: React.DragEvent) => {
+    e.preventDefault();
+    const itemId = e.dataTransfer.getData('text/plain') || dragItem?.itemId;
+    if (!itemId) return;
+    const fromDayId = dragItem?.fromDayId;
+    try {
+      if (fromDayId === targetDayId) {
+        // 同天排序
+        await db.moveItem(targetDayId, itemId, targetOrder);
+      } else {
+        // 跨天移动
+        await db.moveItemAcrossDays(itemId, targetDayId, targetOrder);
+      }
+      await load();
+    } catch (err: any) {
+      alert('移动失败: ' + (err?.message || '未知错误'));
+    } finally {
+      setDragItem(null);
+      setDragOverDayId(null);
+    }
   };
 
   const handleEditVisitMinutes = async (item: ItineraryItem) => {
@@ -971,19 +1062,21 @@ export default function TripDetail() {
         background: 'rgba(26,26,46,0.97)', borderRight: '1px solid rgba(255,255,255,0.08)',
         padding: 20, zIndex: 10,
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <Link to="/" style={{ color: '#06d6a0', fontSize: 13 }}>← 返回列表</Link>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <Link to="/" style={{ color: '#06d6a0', fontSize: 13, textDecoration: 'none' }}>← 返回列表</Link>
           <div style={{ display: 'flex', gap: 6 }}>
             <button style={toggleBtn('editor')} onClick={() => setMode('editor')}>✍️ 编辑</button>
             <button style={toggleBtn('viewer')} onClick={() => setMode('viewer')}>📖 预览</button>
           </div>
         </div>
-        <h1 style={{ fontSize: 18, marginTop: 4, color: '#ffd166' }}>{trip.title}</h1>
-        <p style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
-          {trip.destination} · {trip.startDate} ~ {trip.endDate}
-          {trip.cityNodes?.length ? ` · ${trip.cityNodes.map((c) => `${c.city}${c.nights}晚`).join('·')}` : ''}
-        </p>
-        {!online && <div style={{ background: '#fff3cd', padding: 6, borderRadius: 4, margin: '8px 0', fontSize: 12, color: '#856404' }}>当前为离线/弱网模式</div>}
+        <div style={{ padding: '14px 16px', borderRadius: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', marginBottom: 12 }}>
+          <h1 style={{ fontSize: 20, margin: 0, color: '#ffd166', fontWeight: 700 }}>{trip.title}</h1>
+          <p style={{ fontSize: 12, color: '#9a9ab0', margin: '6px 0 0' }}>
+            {trip.destination} · {trip.startDate} ~ {trip.endDate}
+            {trip.cityNodes?.length ? ` · ${trip.cityNodes.map((c) => `${c.city}${c.nights}晚`).join('·')}` : ''}
+          </p>
+        </div>
+        {!online && <div style={{ background: 'rgba(255,209,102,0.12)', padding: 6, borderRadius: 6, margin: '8px 0', fontSize: 12, color: '#ffd166' }}>当前为离线/弱网模式</div>}
 
         {trip.totalBudget && (
           <div style={{ marginBottom: 10, display: 'flex', gap: 12, fontSize: 13 }}>
@@ -1003,21 +1096,7 @@ export default function TripDetail() {
           </button>
         </div>
 
-        {/* 诊断按钮:点击查看地图数据真实状态 */}
-        <button
-          onClick={() => {
-            const lines = daySummaries.map((ds) =>
-              `Day${ds.day.daySeq}: ${ds.items.length}个 item, ${ds.items.filter(i => i.poi).length}个有poi, ${ds.items.filter(i => i.poi && i.poi.lng !== 0 && i.poi.lat !== 0).length}个有坐标` +
-              ds.items.filter(i => i.poi).map(i => `\n   - ${i.poi!.name} (${i.poi!.lng},${i.poi!.lat})`).join('')
-            );
-            alert(
-              `天数: ${daySummaries.length}\n地图实例: ${mapRef.current ? 'OK' : 'NULL'}\n地图错误: ${mapError || '无'}\n\n${lines.join('\n\n') || '无数据'}`
-            );
-          }}
-          style={{ width: '100%', padding: '4px', marginBottom: 8, fontSize: 11, background: 'rgba(255,209,102,0.1)', border: '1px solid rgba(255,209,102,0.3)', color: '#ffd166', borderRadius: 4, cursor: 'pointer' }}
-        >
-          🔍 诊断地图数据
-        </button>
+        <div style={{ fontSize: 13, color: '#06d6a0', fontWeight: 600, marginBottom: 6 }}>点击某天查看行程 · 拖拽景点可排序/跨天</div>
 
         <div style={{ fontSize: 13, color: '#06d6a0', fontWeight: 600, marginBottom: 6 }}>点击某天查看行程</div>
 
@@ -1031,7 +1110,18 @@ export default function TripDetail() {
           const hasValidCoords = ds?.items.some((it) => it.poi && it.poi.lng !== 0 && it.poi.lat !== 0);
 
           return (
-            <div key={d.id} style={{ marginBottom: 8 }}>
+            <div
+              key={d.id}
+              onDragOver={handleDragOver(d.id)}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop(d.id, ds?.items.length ?? 0)}
+              style={{
+                marginBottom: 8, borderRadius: 10,
+                outline: dragOverDayId === d.id ? '2px dashed #06d6a0' : 'none',
+                outlineOffset: 2,
+                transition: 'background 0.1s',
+              }}
+            >
               <div
                 onClick={() => {
                   // V6.2b:主体点击只「展开」行程明细(收起交给右上角收起按钮),避免点景点误收起
@@ -1044,10 +1134,12 @@ export default function TripDetail() {
                   }
                 }}
                 style={{
-                  padding: '10px 12px', borderRadius: 8,
+                  padding: '12px 14px', borderRadius: 10,
                   borderLeft: `3px solid ${color}`,
-                  background: isActive ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)',
+                  background: isActive ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.03)',
+                  border: '1px solid rgba(255,255,255,0.06)',
                   cursor: 'pointer',
+                  transition: 'background 0.15s',
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1091,7 +1183,20 @@ export default function TripDetail() {
                       <>
                         <div style={{ margin: 0 }}>
                           {ds!.items.map((it, idx) => (
-                            <div key={it.id} style={{ fontSize: 13, padding: '6px 0', borderBottom: idx < ds!.items.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                            <div
+                              key={it.id}
+                              draggable
+                              onDragStart={handleDragStart(it.id, ds!.day.id)}
+                              onDragEnd={() => { setDragItem(null); setDragOverDayId(null); }}
+                              style={{
+                                fontSize: 13, padding: '6px 4px', borderBottom: idx < ds!.items.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
+                                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                                cursor: 'grab',
+                                background: dragItem?.itemId === it.id ? 'rgba(6,214,160,0.12)' : 'transparent',
+                                borderRadius: 6,
+                              }}
+                            >
+                              <span style={{ cursor: 'grab', color: '#555', fontSize: 14, userSelect: 'none' }} title="拖拽排序/跨天">⋮⋮</span>
                               <div
                                 style={{ flex: 1, overflow: 'hidden', cursor: it.poi ? 'pointer' : 'default' }}
                                 onClick={(e) => { e.stopPropagation(); it.poi && focusPoi(it.id); }}
@@ -1307,34 +1412,34 @@ export default function TripDetail() {
               <div style={{ color: '#aaa', fontSize: 12, marginTop: 4 }}>起点和终点固定不变,仅优化中间景点的顺序与归属天</div>
             </div>
             <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px' }}>
-              <div style={{ fontSize: 12, color: '#ffd166', marginBottom: 6 }}>🛫 起点(第一晚酒店)</div>
+              <div style={{ fontSize: 12, color: '#ffd166', marginBottom: 6 }}>🛫 起点(某天锚点)</div>
               <select
                 value={optimizeSetup.startIdx}
                 onChange={(e) => setOptimizeSetup({ ...optimizeSetup, startIdx: +e.target.value })}
                 style={{ width: '100%', padding: 8, borderRadius: 6, background: '#222', color: '#eee', border: '1px solid #444', marginBottom: 14, fontSize: 13 }}
               >
-                {optimizeSetup.dayHotels.map((dh, i) => (
-                  <option key={dh.dayId} value={i}>Day{dh.daySeq} · 🏨{dh.name}</option>
+                {optimizeSetup.days.map((da, i) => (
+                  <option key={da.dayId} value={i}>Day{da.daySeq} · {da.fromHotel ? '🏨' : '📍'}{da.poi.name}</option>
                 ))}
               </select>
 
-              <div style={{ fontSize: 12, color: '#ffd166', marginBottom: 6 }}>🛬 终点(最后一晚酒店)</div>
+              <div style={{ fontSize: 12, color: '#ffd166', marginBottom: 6 }}>🛬 终点(某天锚点)</div>
               <select
                 value={optimizeSetup.endIdx}
                 onChange={(e) => setOptimizeSetup({ ...optimizeSetup, endIdx: +e.target.value })}
                 style={{ width: '100%', padding: 8, borderRadius: 6, background: '#222', color: '#eee', border: '1px solid #444', marginBottom: 14, fontSize: 13 }}
               >
-                {optimizeSetup.dayHotels.map((dh, i) => (
-                  <option key={dh.dayId} value={i}>Day{dh.daySeq} · 🏨{dh.name}</option>
+                {optimizeSetup.days.map((da, i) => (
+                  <option key={da.dayId} value={i}>Day{da.daySeq} · {da.fromHotel ? '🏨' : '📍'}{da.poi.name}</option>
                 ))}
               </select>
 
               {optimizeSetup.startIdx === optimizeSetup.endIdx && (
-                <div style={{ color: '#ff6b6b', fontSize: 12 }}>⚠️ 起点和终点酒店不能相同</div>
+                <div style={{ color: '#ff6b6b', fontSize: 12 }}>⚠️ 起点和终点天不能相同</div>
               )}
               <div style={{ fontSize: 11, color: '#888', marginTop: 8 }}>
-                以酒店为锚点:起点酒店 → 经 {optimizeSetup.all.length} 个景点 → 终点酒店。
-                每个景点按「最近的酒店」归位到当天住宿,酒店固定不变。
+                以「天锚点」为界(🏨=该天有酒店,📍=该天首个景点):起点天 → 经 {optimizeSetup.pois.length} 个景点 → 终点天。
+                每个景点归到最近的城市天,跨城不搬,连住自动平摊。
               </div>
             </div>
             <div style={{ padding: '14px 20px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>

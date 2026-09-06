@@ -52,6 +52,8 @@ export interface Poi {
   rating?: number;
   address?: string;
   closedDays?: string[];
+  city?: string;   // V6.3 逆地理绑定:所属城市
+  fixed?: boolean; // V6.3 已逆地理纠错标记
 }
 
 export interface PoiAiCard {

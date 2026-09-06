@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { db } from '../services/db';
 import { searchTransport, type TransportOption } from '../services/transport';
 import type { Transport, TransportModeType, TransportSegmentType, Trip } from '../types';
+import { C, btn, btnGhost, btnSmall, input } from '../components/ui';
 
 const MODES: { value: TransportModeType; label: string }[] = [
   { value: 'flight', label: '飞机' },
@@ -144,44 +145,44 @@ export default function TransportPage() {
   };
 
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto', padding: 24 }}>
-      <Link to={`/trip/${tripId}`}>&larr; 返回旅程</Link>
-      <h1>大交通管理</h1>
+    <div style={{ maxWidth: 600, margin: '0 auto', padding: 24, minHeight: '100vh' }}>
+      <Link to={`/trip/${tripId}`} style={{ color: C.success, fontSize: 13, textDecoration: 'none' }}>&larr; 返回旅程</Link>
+      <h1 style={{ fontSize: 24, fontWeight: 700 }}>大交通管理</h1>
 
       {!showForm ? (
-        <button onClick={() => { resetForm(); setShowForm(true); }}>+ 添加交通</button>
+        <button onClick={() => { resetForm(); setShowForm(true); }} style={btn()}>+ 添加交通</button>
       ) : (
-        <div style={{ padding: 12, border: '1px dashed #ccc', borderRadius: 8, marginBottom: 16 }}>
-          {error && <p style={{ color: '#c00', fontSize: 13 }}>{error}</p>}
+        <div style={{ padding: 16, border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 12, marginBottom: 16, background: 'rgba(255,255,255,0.02)' }}>
+          {error && <p style={{ color: C.danger, fontSize: 13 }}>{error}</p>}
 
           <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-            <select value={form.segType} onChange={(e) => setForm({ ...form, segType: e.target.value as TransportSegmentType })}>
+            <select value={form.segType} onChange={(e) => setForm({ ...form, segType: e.target.value as TransportSegmentType })} style={{ ...input, width: 'auto' }}>
               {SEG_TYPES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
-            <select value={form.mode} onChange={(e) => { setForm({ ...form, mode: e.target.value as TransportModeType }); setResults([]); }}>
+            <select value={form.mode} onChange={(e) => { setForm({ ...form, mode: e.target.value as TransportModeType }); setResults([]); }} style={{ ...input, width: 'auto' }}>
               {MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
           </div>
 
           <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-            <input placeholder="出发地" value={form.fromPlace} onChange={(e) => setForm({ ...form, fromPlace: e.target.value })} style={{ flex: 1 }} />
-            <input placeholder="目的地" value={form.toPlace} onChange={(e) => setForm({ ...form, toPlace: e.target.value })} style={{ flex: 1 }} />
+            <input placeholder="出发地" value={form.fromPlace} onChange={(e) => setForm({ ...form, fromPlace: e.target.value })} style={{ ...input, flex: 1 }} />
+            <input placeholder="目的地" value={form.toPlace} onChange={(e) => setForm({ ...form, toPlace: e.target.value })} style={{ ...input, flex: 1 }} />
           </div>
 
           {/* V6.2 真实班次查询 */}
           {(form.mode === 'flight' || form.mode === 'train') && (
-            <div style={{ marginBottom: 8, padding: 8, background: '#f7f7f7', borderRadius: 6 }}>
+            <div style={{ marginBottom: 8, padding: 10, background: 'rgba(22,119,255,0.06)', borderRadius: 8 }}>
               <div style={{ display: 'flex', gap: 8 }}>
-                <input type="date" value={queryDate} onChange={(e) => setQueryDate(e.target.value)} style={{ flex: 1 }} />
-                <button onClick={handleSearch} disabled={searching}>{searching ? '查询中…' : '🔍 查询班次'}</button>
+                <input type="date" value={queryDate} onChange={(e) => setQueryDate(e.target.value)} style={{ ...input, flex: 1 }} />
+                <button onClick={handleSearch} disabled={searching} style={{ ...btnGhost, ...btnSmall, whiteSpace: 'nowrap' }}>{searching ? '查询中…' : '🔍 查询班次'}</button>
               </div>
               {results.length > 0 && (
                 <div style={{ maxHeight: 180, overflow: 'auto', marginTop: 8 }}>
                   {results.map((o, i) => (
-                    <div key={i} onClick={() => handleSelectOption(o)} style={{ padding: '6px 8px', borderBottom: '1px solid #eee', cursor: 'pointer', fontSize: 13 }}>
-                      <strong>{o.train_no || o.flight_no}</strong>{' '}
-                      {o.departure_time}→{o.arrival_time} ({o.duration})
-                      {o.ticket_price ? ` · ¥${o.ticket_price}` : o.seat_prices?.second_class ? ` · 二等座¥${o.seat_prices.second_class}` : ''}
+                    <div key={i} onClick={() => handleSelectOption(o)} style={{ padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.06)', cursor: 'pointer', fontSize: 13, borderRadius: 6, transition: 'background 0.1s' }} onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')} onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}>
+                      <strong style={{ color: C.warning }}>{o.train_no || o.flight_no}</strong>{' '}
+                      <span>{o.departure_time}→{o.arrival_time} ({o.duration})</span>
+                      <span style={{ color: C.success, marginLeft: 6 }}>{o.ticket_price ? `¥${o.ticket_price}` : o.seat_prices?.second_class ? `二等座¥${o.seat_prices.second_class}` : ''}</span>
                     </div>
                   ))}
                 </div>
@@ -189,37 +190,32 @@ export default function TransportPage() {
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-            <input type="datetime-local" value={form.departAt} onChange={(e) => setForm({ ...form, departAt: e.target.value })} />
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+            <input type="datetime-local" value={form.departAt} onChange={(e) => setForm({ ...form, departAt: e.target.value })} style={input} />
             <span style={{ alignSelf: 'center' }}>→</span>
-            <input type="datetime-local" value={form.arriveAt} onChange={(e) => setForm({ ...form, arriveAt: e.target.value })} />
+            <input type="datetime-local" value={form.arriveAt} onChange={(e) => setForm({ ...form, arriveAt: e.target.value })} style={input} />
           </div>
 
           {(form.mode === 'flight' || form.mode === 'train') && (
             <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-              <input
-                placeholder={form.mode === 'flight' ? '航班号 (如 ZH9123)' : '车次 (如 G1234)'}
-                value={form.mode === 'flight' ? form.flightNo : form.trainNo}
-                onChange={(e) => setForm({ ...form, [form.mode === 'flight' ? 'flightNo' : 'trainNo']: e.target.value })}
-                style={{ flex: 1 }}
-              />
-              <input type="number" placeholder="票价(选填)" value={price} onChange={(e) => setPrice(e.target.value)} style={{ width: 140 }} />
+              <input placeholder={form.mode === 'flight' ? '航班号 (如 ZH9123)' : '车次 (如 G1234)'} value={form.mode === 'flight' ? form.flightNo : form.trainNo} onChange={(e) => setForm({ ...form, [form.mode === 'flight' ? 'flightNo' : 'trainNo']: e.target.value })} style={{ ...input, flex: 1 }} />
+              <input type="number" placeholder="票价(选填)" value={price} onChange={(e) => setPrice(e.target.value)} style={{ ...input, width: 120 }} />
             </div>
           )}
 
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={handleSubmit}>{editId ? '保存修改' : '确认添加'}</button>
-            <button onClick={() => { setShowForm(false); resetForm(); }}>取消</button>
+            <button onClick={handleSubmit} style={btn()}>{editId ? '保存修改' : '确认添加'}</button>
+            <button onClick={() => { setShowForm(false); resetForm(); }} style={btnGhost}>取消</button>
           </div>
         </div>
       )}
 
       {transports.length === 0 ? (
-        <p style={{ color: '#aaa' }}>暂无交通记录</p>
+        <p style={{ color: '#9a9ab0' }}>暂无交通记录</p>
       ) : (
         <ul style={{ listStyle: 'none', padding: 0 }}>
           {transports.map((t) => (
-            <li key={t.id} style={{ padding: 10, border: '1px solid #eee', borderRadius: 6, marginBottom: 8 }}>
+            <li key={t.id} style={{ padding: 14, border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, marginBottom: 8, background: 'rgba(255,255,255,0.02)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                 <div>
                   <div style={{ fontWeight: 'bold' }}>

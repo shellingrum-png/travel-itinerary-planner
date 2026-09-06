@@ -5,6 +5,7 @@ import type { Trip } from '../types';
 import seedData from '../seed.json';
 import CreateWizard from '../components/CreateWizard';
 import { listBackedUpTrips, restoreTrip, backupTrip } from '../services/sync';
+import { C, btn, btnGhost, btnSmall } from '../components/ui';
 
 export default function TripList() {
   const [trips, setTrips] = useState<Trip[]>([]);
@@ -109,64 +110,55 @@ export default function TripList() {
 
   return (
     <div style={{ maxWidth: 600, margin: '0 auto', padding: 24 }}>
-      <h1>我的旅程</h1>
+      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>我的旅程</h1>
+      <p style={{ color: '#9a9ab0', fontSize: 13, marginTop: 0, marginBottom: 20 }}>规划 · 优化 · 记账 · 云备份</p>
 
-      <button onClick={() => setShowWizard(!showWizard)} style={{ background: '#06d6a0', color: '#001', border: 'none', padding: '8px 16px', borderRadius: 6, fontWeight: 600 }}>
-        {showWizard ? '取消' : '+ 新建旅程'}
-      </button>
-
-      <button
-        onClick={importSeed}
-        disabled={importing}
-        style={{ marginLeft: 8, background: '#1677ff', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: 4 }}
-      >
-        {importing ? '导入中…' : '导入青甘大环线'}
-      </button>
-
-      <button
-        onClick={handleRestoreFromCloud}
-        disabled={restoring}
-        style={{ marginLeft: 8, background: 'rgba(255,255,255,0.1)', color: '#ddd', border: '1px solid #444', padding: '6px 12px', borderRadius: 4 }}
-        title="换设备/浏览器后,从云端拉回旅程"
-      >
-        {restoring ? '恢复中…' : '☁️ 从云端恢复'}
-      </button>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+        <button onClick={() => setShowWizard(!showWizard)} style={{ ...btn(C.success, '#001'), fontWeight: 700 }}>
+          {showWizard ? '取消' : '+ 新建旅程'}
+        </button>
+        <button onClick={importSeed} disabled={importing} style={{ ...btn(), opacity: importing ? 0.5 : 1, ...btnSmall }}>
+          {importing ? '导入中…' : '导入青甘大环线'}
+        </button>
+        <button onClick={handleRestoreFromCloud} disabled={restoring} style={{ ...btnGhost, border: '1px solid #333', ...btnSmall }} title="换设备/浏览器后,从云端拉回旅程">
+          {restoring ? '恢复中…' : '☁️ 从云端恢复'}
+        </button>
+      </div>
 
       {showWizard && <CreateWizard onClose={() => setShowWizard(false)} />}
 
-      <ul style={{ marginTop: 16, listStyle: 'none', padding: 0 }}>
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {trips.map((t) => (
           <li
             key={t.id}
             style={{
-              padding: 12,
-              border: '1px solid #eee',
-              borderRadius: 8,
-              marginBottom: 8,
+              padding: 16,
+              border: '1px solid rgba(255,255,255,0.08)',
+              borderRadius: 12,
+              marginBottom: 10,
               cursor: 'pointer',
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
+              background: 'rgba(255,255,255,0.03)',
+              transition: 'background 0.15s, transform 0.05s',
             }}
             onClick={() => navigate(`/trip/${t.id}`)}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
           >
             <div>
-              <strong>{t.title}</strong>
-              <div style={{ color: '#888', fontSize: 14 }}>
+              <strong style={{ fontSize: 15 }}>{t.title}</strong>
+              <div style={{ color: '#9a9ab0', fontSize: 13, marginTop: 4 }}>
                 {t.destination} · {t.startDate} ~ {t.endDate} · {t.status}
                 {t.cityNodes && t.cityNodes.length > 0 && (
-                  <div style={{ color: '#06d6a0', fontSize: 12, marginTop: 2 }}>
-                    {t.cityNodes.map((c) => `${c.city}${c.nights}晚`).join(' · ')}
+                  <div style={{ color: C.success, fontSize: 12, marginTop: 2, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {t.cityNodes.map((c, i) => <span key={i}>🏨 {c.city} {c.nights}晚</span>)}
                   </div>
                 )}
               </div>
             </div>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                remove(t.id);
-              }}
-            >
+            <button onClick={(e) => { e.stopPropagation(); remove(t.id); }} style={{ ...btnGhost, ...btnSmall, color: '#ff6b6b' }}>
               删除
             </button>
           </li>

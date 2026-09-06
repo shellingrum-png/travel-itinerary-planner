@@ -26,6 +26,8 @@ export interface Db {
   addItem(item: Omit<ItineraryItem, 'id' | 'orderSeq'>): Promise<ItineraryItem>;
   updateItem(id: string, patch: Partial<ItineraryItem>): Promise<void>;
   moveItem(dayId: string, itemId: string, newOrder: number): Promise<void>;
+  /** V6.2 拖拽:跨天移动(item 从原天删,插入目标天指定位置) */
+  moveItemAcrossDays(itemId: string, targetDayId: string, targetOrder: number): Promise<void>;
   removeItem(id: string): Promise<void>;
 
   // pois

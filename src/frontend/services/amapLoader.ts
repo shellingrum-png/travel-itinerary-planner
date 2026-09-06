@@ -58,6 +58,17 @@ export function loadRoutePlanner(mode: 'drive' | 'walk' | 'transit'): Promise<an
   });
 }
 
+/** 加载高德逆地理编码插件(反查坐标所在城市, V6.3) */
+export function loadGeocoder(): Promise<any> {
+  return new Promise((resolve, reject) => {
+    loadAMap().then((AMap) => {
+      AMap.plugin('AMap.Geocoder', () => {
+        resolve(AMap.Geocoder);
+      });
+    }).catch(reject);
+  });
+}
+
 declare global {
   interface Window {
     AMap: any;

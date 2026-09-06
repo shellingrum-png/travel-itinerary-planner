@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { db } from '../services/db';
 import type { Expense, ExpenseCategory, Trip } from '../types';
+import { C, btn, btnGhost, btnSmall, card, input } from '../components/ui';
 
 const CATEGORIES: { value: ExpenseCategory; label: string }[] = [
   { value: 'transport', label: '大交通' },
@@ -105,45 +106,42 @@ export default function Bookkeeping() {
   const splits = splitByPayer();
 
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto', padding: 24 }}>
-      <Link to={`/trip/${tripId}`}>&larr; 返回旅程</Link>
-      <h1>记账</h1>
+    <div style={{ maxWidth: 600, margin: '0 auto', padding: 24, minHeight: '100vh' }}>
+      <Link to={`/trip/${tripId}`} style={{ color: '#06d6a0', fontSize: 13, textDecoration: 'none' }}>&larr; 返回旅程</Link>
+      <h1 style={{ fontSize: 24, fontWeight: 700 }}>记账</h1>
 
       {/* 预算条 */}
       {totalBudget > 0 && (
         <div style={{
           marginBottom: 20,
-          padding: 12,
-          borderRadius: 8,
-          background: overBudget ? '#fff0f0' : '#f0f9f0',
-          border: overBudget ? '2px solid #d32f2f' : '1px solid #e0e0e0',
+          padding: 16,
+          borderRadius: 12,
+          background: overBudget ? 'rgba(255,107,107,0.08)' : 'rgba(6,214,160,0.06)',
+          border: overBudget ? '1px solid rgba(255,107,107,0.4)' : '1px solid rgba(255,255,255,0.1)',
         }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
-            <span>已花 ¥{spent.toFixed(0)}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: 15 }}>
+            <span>已花 <span style={{ color: C.warning }}>¥{spent.toFixed(0)}</span></span>
             <span>预算 ¥{totalBudget.toFixed(0)}</span>
-            <span style={{ color: overBudget ? '#d32f2f' : '#2e7d32' }}>
+            <span style={{ color: overBudget ? C.danger : C.success }}>
               剩余 ¥{remain.toFixed(0)}
             </span>
           </div>
-          <div style={{ marginTop: 8, height: 8, background: '#e0e0e0', borderRadius: 4, overflow: 'hidden' }}>
+          <div style={{ marginTop: 10, height: 8, background: 'rgba(255,255,255,0.1)', borderRadius: 4, overflow: 'hidden' }}>
             <div style={{
               height: '100%',
               width: `${Math.min(100, (spent / totalBudget) * 100)}%`,
-              background: overBudget ? '#d32f2f' : '#4caf50',
+              background: overBudget ? C.danger : C.success,
               borderRadius: 4,
               transition: 'width 0.3s',
             }} />
           </div>
-          {overBudget && <div style={{ color: '#d32f2f', marginTop: 4, fontWeight: 'bold' }}>预算已超额!</div>}
-          <div style={{ marginTop: 8, fontSize: 13, color: '#666', display: 'flex', justifyContent: 'space-between' }}>
+          {overBudget && <div style={{ color: C.danger, marginTop: 6, fontWeight: 'bold', fontSize: 13 }}>预算已超额!</div>}
+          <div style={{ marginTop: 10, fontSize: 13, color: '#9a9ab0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span>
-              {perCapitaMode === 'perSpent' ? '人均已花' : '人均剩余'} ¥{perCapita.toFixed(0)}
+              {perCapitaMode === 'perSpent' ? '人均已花' : '人均剩余'} <strong style={{ color: '#e8e8f0' }}>¥{perCapita.toFixed(0)}</strong>
               {' '}({companionCount}人)
             </span>
-            <button
-              onClick={() => setPerCapitaMode(perCapitaMode === 'perSpent' ? 'perRemain' : 'perSpent')}
-              style={{ fontSize: 12, border: 'none', background: 'none', cursor: 'pointer', color: '#1677ff' }}
-            >
+            <button onClick={() => setPerCapitaMode(perCapitaMode === 'perSpent' ? 'perRemain' : 'perSpent')} style={{ fontSize: 12, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.08)', cursor: 'pointer', color: C.info, borderRadius: 6, padding: '4px 10px' }}>
               切换
             </button>
           </div>
@@ -151,23 +149,23 @@ export default function Bookkeeping() {
       )}
 
       {/* 消费列表 */}
-      <h2>消费记录</h2>
+      <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>消费记录</h2>
       {expenses.length === 0 ? (
-        <p style={{ color: '#aaa' }}>暂无消费记录</p>
+        <p style={{ color: '#9a9ab0' }}>暂无消费记录</p>
       ) : (
         <ul style={{ listStyle: 'none', padding: 0 }}>
           {expenses.map((e) => (
-            <li key={e.id} style={{ padding: 8, borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <li key={e.id} style={{ padding: 12, borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, borderRadius: 8, background: 'rgba(255,255,255,0.02)' }}>
               <div>
                 <div>
-                  <strong>¥{e.amount.toFixed(2)}</strong>
-                  {' '}{CATEGORIES.find((c) => c.value === e.category)?.label ?? e.category}
+                  <strong style={{ fontSize: 15 }}>¥{e.amount.toFixed(2)}</strong>
+                  {' '}<span style={{ fontSize: 13 }}>{CATEGORIES.find((c) => c.value === e.category)?.label ?? e.category}</span>
                 </div>
-                <div style={{ color: '#888', fontSize: 13 }}>
+                <div style={{ color: '#9a9ab0', fontSize: 13, marginTop: 2 }}>
                   {e.date}{e.note ? ` · ${e.note}` : ''}{e.paidBy ? ` · ${e.paidBy}付` : ''}
                 </div>
               </div>
-              <button onClick={() => handleDelete(e.id)} style={{ color: '#c00', border: 'none', background: 'none', cursor: 'pointer' }}>
+              <button onClick={() => handleDelete(e.id)} style={{ color: C.danger, border: 'none', background: 'none', cursor: 'pointer', fontSize: 13 }}>
                 删除
               </button>
             </li>
@@ -177,32 +175,22 @@ export default function Bookkeeping() {
 
       {/* 添加消费 */}
       {!showForm ? (
-        <button onClick={() => setShowForm(true)} style={{ marginTop: 12 }}>+ 记一笔</button>
+        <button onClick={() => setShowForm(true)} style={{ ...btn(), marginTop: 12 }}>+ 记一笔</button>
       ) : (
-        <div style={{ marginTop: 12, padding: 12, border: '1px dashed #ccc', borderRadius: 8 }}>
-          {error && <p style={{ color: '#c00', fontSize: 13 }}>{error}</p>}
+        <div style={{ marginTop: 12, padding: 16, border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 12, background: 'rgba(255,255,255,0.02)' }}>
+          {error && <p style={{ color: C.danger, fontSize: 13 }}>{error}</p>}
           <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-            <input
-              type="number"
-              placeholder="金额"
-              value={amount}
-              onChange={(e) => { setAmount(e.target.value); setError(null); }}
-              style={{ width: 100 }}
-              step="0.01"
-              min="0"
-            />
-            <select value={category} onChange={(e) => setCategory(e.target.value as ExpenseCategory)}>
-              {CATEGORIES.map((c) => (
-                <option key={c.value} value={c.value}>{c.label}</option>
-              ))}
+            <input type="number" placeholder="金额" value={amount} onChange={(e) => { setAmount(e.target.value); setError(null); }} style={{ ...input, width: 100 }} step="0.01" min="0" />
+            <select value={category} onChange={(e) => setCategory(e.target.value as ExpenseCategory)} style={{ ...input, width: 'auto' }}>
+              {CATEGORIES.map((c) => (<option key={c.value} value={c.value}>{c.label}</option>))}
             </select>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-            <input placeholder="备注" value={note} onChange={(e) => setNote(e.target.value)} />
-            <input placeholder="付款人" value={paidBy} onChange={(e) => setPaidBy(e.target.value)} />
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...input, width: 'auto' }} />
+            <input placeholder="备注" value={note} onChange={(e) => setNote(e.target.value)} style={{ ...input, flex: 1 }} />
+            <input placeholder="付款人" value={paidBy} onChange={(e) => setPaidBy(e.target.value)} style={{ ...input, width: 90 }} />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={handleAdd}>确认</button>
-            <button onClick={() => { setShowForm(false); setError(null); }}>取消</button>
+            <button onClick={handleAdd} style={btn()}>确认</button>
+            <button onClick={() => { setShowForm(false); setError(null); }} style={btnGhost}>取消</button>
           </div>
         </div>
       )}
@@ -210,15 +198,13 @@ export default function Bookkeeping() {
       {/* 分摊账单 */}
       {splits.length > 1 && (
         <div style={{ marginTop: 24 }}>
-          <h2>分摊账单</h2>
-          <div style={{ border: '1px solid #e0e0e0', borderRadius: 8, padding: 12 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 600 }}>分摊账单</h2>
+          <div style={{ border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: 12, background: 'rgba(255,255,255,0.02)' }}>
             {splits.map((s, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: i < splits.length - 1 ? '1px solid #f0f0f0' : 'none' }}>
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: i < splits.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none', fontSize: 14 }}>
                 <span>{s.payer}</span>
-                <span>已付 ¥{s.paid.toFixed(0)}</span>
-                <span style={{ color: s.diff > 0 ? '#2e7d32' : s.diff < 0 ? '#c00' : '#888' }}>
-                  {s.diff > 0 ? `应收 ¥${s.diff.toFixed(0)}` : s.diff < 0 ? `应付 ¥${Math.abs(s.diff).toFixed(0)}` : '已平'}
-                </span>
+                <span>已付 <strong style={{ color: C.warning }}>¥{s.paid.toFixed(0)}</strong></span>
+                <span style={{ color: s.diff > 0 ? C.success : s.diff < 0 ? C.danger : '#888' }}>{s.diff > 0 ? `应收 ¥${s.diff.toFixed(0)}` : s.diff < 0 ? `应付 ¥${Math.abs(s.diff).toFixed(0)}` : '已平'}</span>
               </div>
             ))}
           </div>

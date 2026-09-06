@@ -20,7 +20,7 @@ export interface PoiSearchResult {
   type: string;
 }
 
-import { loadPlaceSearch, loadRoutePlanner } from './amapLoader';
+import { loadPlaceSearch, loadRoutePlanner, loadGeocoder } from './amapLoader';
 
 /** 使用高德 JS API PlaceSearch（无需 Web 服务 Key） */
 export async function searchPoiByJS(keyword: string, city?: string): Promise<PoiSearchResult[]> {
@@ -49,6 +49,63 @@ export async function searchPoiByJS(keyword: string, city?: string): Promise<Poi
       }));
     });
   });
+}
+
+/** 逆地理编码:反查坐标所在城市(V6.3 城市绑定/坐标纠错) */
+export async function reverseGeocode(lng: number, lat: number): Promise<string> {
+  try {
+    const Geocoder = await loadGeocoder();
+    return await new Promise((resolve) => {
+      const g = new Geocoder();
+      g.getAddress([lng, lat], (status: string, result: any) => {
+        if (status === 'complete' && result?.regeocode) {
+          const c = result.regeocode.addressComponent;
+          const city = c?.city || c?.province || '';
+          resolve(city);
+        } else {
+          resolve('');
+        }
+      });
+      setTimeout(() => resolve(''), 4000); // 超时兜底
+    });
+  } catch {
+    return '';
+  }
+}
+
+/** 获取驾车路线路径点(V6.3 过渡日顺路路由:起点→终点经过的坐标数组) */
+export async function getDrivingPath(
+  from: [number, number],
+  to: [number, number],
+): Promise<[number, number][]> {
+  try {
+    const Driving = await loadRoutePlanner('drive');
+    return await new Promise((resolve) => {
+      const d = new Driving({ pageSize: 1 });
+      d.search(from, to, (status: string, r: any) => {
+        if (status === 'complete' && r?.routes?.[0]) {
+          const route = r.routes[0];
+          // 展平 steps 的 path 为 [lng,lat][] 坐标数组
+          const points: [number, number][] = [];
+          (route.steps || []).forEach((step: any) => {
+            (step.path || []).forEach((p: any) => {
+              const lng = typeof p?.lng === 'number' ? p.lng : Number(p?.lng);
+              const lat = typeof p?.lat === 'number' ? p.lat : Number(p?.lat);
+              if (!isNaN(lng) && !isNaN(lat)) points.push([lng, lat]);
+            });
+          });
+          // 若 steps 无 path,退化用起终点
+          if (points.length === 0) points.push(from, to);
+          resolve(points);
+        } else {
+          resolve([from, to]);
+        }
+      });
+      setTimeout(() => resolve([from, to]), 5000);
+    });
+  } catch {
+    return [from, to];
+  }
 }
 
 export async function getDuration(
