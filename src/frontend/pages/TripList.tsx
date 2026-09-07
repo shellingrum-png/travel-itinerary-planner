@@ -64,7 +64,12 @@ export default function TripList() {
   const importSeed = async () => {
     setImporting(true);
     try {
+      // 先删同名的旧旅程(避免重复;坐标污染后重导也能自动清理)
       const s = seedData as any;
+      const existing = await db.listTrips();
+      const dupes = existing.filter((t) => t.title === s.trip.title);
+      for (const d of dupes) await db.deleteTrip(d.id);
+
       const trip = await db.createTrip({
         title: s.trip.title,
         destination: s.trip.destination,

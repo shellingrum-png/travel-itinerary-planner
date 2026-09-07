@@ -94,59 +94,15 @@ export default function TripDetail() {
       const items = await db.listItems(d.id);
       const enriched: (ItineraryItem & { poi?: Poi; aiCard?: PoiAiCard })[] = [];
 
-      // 有坐标 POI 直接附加;缺失的留给修复
-      const fixTasks: ItineraryItem[] = [];
+      // 直接附加有坐标的 POI;缺失的保留原 item(仅无地图点),绝不覆盖坐标
+      // (此前的"自动修坐标"用全范围搜索会误盖正确坐标,已移除)
       for (const it of items) {
         const poi = it.poiId ? await db.getPoi(it.poiId) : null;
         if (poi && poi.lng !== 0 && poi.lat !== 0) {
           const card = await db.getPoiCard(poi.id).catch(() => null);
           enriched.push({ ...it, poi, aiCard: card ?? undefined });
         } else {
-          fixTasks.push(it);
-        }
-      }
-
-      // 修复:尽力而为,失败不阻塞(保留原 item,仅无地图点)
-      if (fixTasks.length > 0) {
-        const cityHint = /青甘|环线|大西北|之旅|行程/.test(t.destination) ? '' : (t.destination || '');
-        const fixes = await Promise.all(
-          fixTasks.map(async (it): Promise<ItineraryItem | { item: ItineraryItem; poi: Poi } | null> => {
-            const name = it.note || it.itemType;
-            const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000));
-            try {
-              const results = await Promise.race([searchPoiByJS(name, cityHint), timeout]);
-              const lngResults = (results || []).find((r) => r.lng !== 0 && r.lat !== 0);
-              if (!lngResults) return null;
-              const poiId = it.poiId ?? crypto.randomUUID();
-              await db.upsertPoi({
-                id: poiId, name: lngResults.name, lng: lngResults.lng, lat: lngResults.lat,
-                category: it.itemType === 'hotel' ? 'hotel' : 'poi', address: lngResults.address,
-              });
-              if (!it.poiId) {
-                await db.updateItem(it.id, { poiId });
-              }
-              const poi: Poi = {
-                id: poiId, name: lngResults.name, lng: lngResults.lng, lat: lngResults.lat,
-                category: it.itemType === 'hotel' ? 'hotel' as const : 'poi' as const, address: lngResults.address,
-              };
-              return { item: it, poi };
-            } catch {
-              return null;
-            }
-          }),
-        );
-        for (const fix of fixes) {
-          if (fix && 'item' in fix && 'poi' in fix) {
-            enriched.push({ ...fix.item, poi: fix.poi });
-          } else if (fix) {
-            enriched.push(fix);
-          }
-        }
-        // 修复失败的 item 也保留(有名字,仅无地图点)
-        for (const it of fixTasks) {
-          if (!enriched.some((e) => e.id === it.id)) {
-            enriched.push(it);
-          }
+          enriched.push(it);
         }
       }
 
@@ -457,17 +413,19 @@ export default function TripDetail() {
     endIdx: number;   // 终点=某天锚点 在 days 的索引
   } | null>(null);
 
-  /** 提取每天锚点:优先酒店,无酒店用当天第一个有坐标景点;返回引擎 DayAnchor */
+  /** 提取每天锚点:优先酒店,无酒店用当天第一个有坐标景点;city 用当天景点兜底(同城必然);返回引擎 DayAnchor */
   const getDayAnchors = (): DayAnchor[] => {
     const anchors: DayAnchor[] = [];
     for (const ds of daySummaries) {
+      // 当天景点的 city 兜底(代表该地城市,酒店与景点必然同城)
+      const dayCity = ds.items.find((it) => it.poi?.city)?.poi?.city;
       const hotelItem = ds.items.find((it) => it.itemType === 'hotel' && it.poi && it.poi.lng !== 0 && it.poi.lat !== 0);
       if (hotelItem?.poi) {
-        anchors.push({ daySeq: ds.day.daySeq, dayId: ds.day.id, poi: hotelItem.poi, fromHotel: true, city: hotelItem.poi.city });
+        anchors.push({ daySeq: ds.day.daySeq, dayId: ds.day.id, poi: hotelItem.poi, fromHotel: true, city: hotelItem.poi.city || dayCity });
       } else {
         const poiItem = ds.items.find((it) => it.itemType !== 'hotel' && it.poi && it.poi.lng !== 0 && it.poi.lat !== 0);
         if (poiItem?.poi) {
-          anchors.push({ daySeq: ds.day.daySeq, dayId: ds.day.id, poi: poiItem.poi, fromHotel: false, city: poiItem.poi.city });
+          anchors.push({ daySeq: ds.day.daySeq, dayId: ds.day.id, poi: poiItem.poi, fromHotel: false, city: poiItem.poi.city || dayCity });
         }
       }
     }
@@ -486,7 +444,7 @@ export default function TripDetail() {
     return n;
   };
 
-  /** 逆地理纠错 + 按名重查坐标:绑定城市,坐标偏差>50km 自动修正(优先一次,已 fixed 跳过) */
+  /** 逆地理绑定城市(不动坐标,避免误覆盖正确坐标);已 fixed 跳过 */
   const enrichPoiCities = async (pois: Array<{ poi: Poi; daySeq: number; itemId: string }>): Promise<void> => {
     const toFix = pois.filter((p) => !p.poi.fixed);
     if (toFix.length === 0) return;
@@ -497,23 +455,8 @@ export default function TripDetail() {
       await Promise.all(batch.map(async (p) => {
         const fixedPoi = { ...p.poi, fixed: true as const };
         try {
-          // 1) 按名字重查坐标:与当前偏差>50km → 修正
-          const keyword = cleanPoiName(p.poi.name);
-          let lng = p.poi.lng, lat = p.poi.lat;
-          if (keyword) {
-            const results = await searchPoiByJS(keyword);
-            const hit = results.find((r) => r.lng !== 0 && r.lat !== 0);
-            if (hit) {
-              const dev = haversineKm(p.poi.lng, p.poi.lat, hit.lng, hit.lat);
-              if (dev > 50) {
-                lng = hit.lng; lat = hit.lat;
-                fixedPoi.lng = lng; fixedPoi.lat = lat;
-                fixedPoi.address = hit.address || fixedPoi.address;
-              }
-            }
-          }
-          // 2) 逆地理绑定城市(用修正后坐标)
-          const city = await reverseGeocode(lng, lat);
+          // 仅逆地理绑定城市,保留原坐标(坐标精度是地图正确性的命脉)
+          const city = await reverseGeocode(p.poi.lng, p.poi.lat);
           if (city) fixedPoi.city = city;
         } catch { /* 保底:标记 fixed 避免重复 */ }
         await db.upsertPoi(fixedPoi).catch(() => {});
@@ -524,16 +467,11 @@ export default function TripDetail() {
   /** 打开起点终点选择面板 */
   const handleGlobalOptimize = async () => {
     if (!id) return;
-    const dayAnchors = getDayAnchors();
-    if (dayAnchors.length < 2) {
-      alert('需要有至少 2 天包含景点(或酒店)作为起点/终点锚点。\n请先在行程中为至少 2 天添加带坐标的景点或酒店。');
-      return;
-    }
-    // 收集所有景点
+    // 1. 收集所有景点 + 酒店(酒店也需逆地理绑定城市,作为该天锚点城市)
     const rawPois: Array<{ poi: Poi; daySeq: number; itemId: string }> = [];
     for (const ds of daySummaries) {
       for (const it of ds.items) {
-        if (it.itemType !== 'hotel' && it.poi && it.poi.lng !== 0 && it.poi.lat !== 0) {
+        if (it.poi && it.poi.lng !== 0 && it.poi.lat !== 0) {
           rawPois.push({ poi: it.poi, daySeq: ds.day.daySeq, itemId: it.id });
         }
       }
@@ -542,13 +480,25 @@ export default function TripDetail() {
       alert(`当前只有 ${rawPois.length} 个带坐标的景点(需≥2)。\n请先在行程中添加景点,或检查景点坐标是否有效。`);
       return;
     }
-    // 逆地理纠错(异步,不阻塞)
+    // 2. 先逆地理纠错(写库,填充 poi.city + 修坐标)
     await enrichPoiCities(rawPois);
-    // 重新加载(纠错后 poi 有 city)
+    // 3. 刷新数据,让 daySummaries 里的 poi 带最新 city
+    await load();
+    // 4. 纠错后再取 anchors(此时有 city)
+    const dayAnchors = getDayAnchors();
+    if (dayAnchors.length < 2) {
+      alert('需要有至少 2 天包含景点(或酒店)作为起点/终点锚点。\n请先在行程中为至少 2 天添加带坐标的景点或酒店。');
+      return;
+    }
+    // 5. 重新加载景点(酒店纠错仅用于锚点城市,不入引擎分配;过滤 non-poi)
     const reloaded: ItineraryPoi[] = [];
-    for (const rp of rawPois) {
-      const fresh = await db.getPoi(rp.poi.id);
-      reloaded.push({ id: rp.poi.id, poi: fresh ?? rp.poi, city: fresh?.city ?? rp.poi.city, srcDaySeq: rp.daySeq });
+    for (const ds of daySummaries) {
+      for (const it of ds.items) {
+        if (it.itemType === 'hotel' || !it.poi || it.poi.lng === 0 || it.poi.lat === 0) continue;
+        const fresh = await db.getPoi(it.poi.id).catch(() => null);
+        const p = fresh ?? it.poi;
+        reloaded.push({ id: it.poi.id, poi: p, city: p.city, srcDaySeq: ds.day.daySeq });
+      }
     }
     // 默认:起点=第一天锚点,终点=最后一天锚点
     setOptimizeSetup({ days: dayAnchors, pois: reloaded, startIdx: 0, endIdx: dayAnchors.length - 1 });
