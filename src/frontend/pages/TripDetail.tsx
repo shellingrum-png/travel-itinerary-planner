@@ -444,9 +444,10 @@ export default function TripDetail() {
     return n;
   };
 
-  /** 逆地理绑定城市(不动坐标,避免误覆盖正确坐标);已 fixed 跳过 */
+  /** 逆地理绑定城市(不动坐标,避免误覆盖正确坐标);只对没有 city 的补(不受 fixed 限制) */
   const enrichPoiCities = async (pois: Array<{ poi: Poi; daySeq: number; itemId: string }>): Promise<void> => {
-    const toFix = pois.filter((p) => !p.poi.fixed);
+    // 关键:只要没有 city 就补,不能因 fixed 跳过(否则优化过一次后 city 永远空,引擎失效)
+    const toFix = pois.filter((p) => !p.poi.city);
     if (toFix.length === 0) return;
     // 并发(限 5,防高德频控)
     const BATCH = 5;
