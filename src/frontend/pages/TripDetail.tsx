@@ -881,6 +881,8 @@ export default function TripDetail() {
     setSelectedScenic(null); setScenicCard(null); setScenicResults([]); setScenicKeyword('');
     setTicketPrice('');
     clearTempMarker(); await load();
+    // 添加成功后自动关闭编辑面板
+    setEditExpanded(prev => ({ ...prev, [activeDayId]: false }));
   };
 
   // ── 酒店搜索 ──
@@ -917,6 +919,8 @@ export default function TripDetail() {
     setSelectedHotel(null); setHotelResults([]); setHotelKeyword('');
     setHotelPrice('');
     clearTempMarker(); await load();
+    // 添加成功后自动关闭编辑面板
+    setEditExpanded(prev => ({ ...prev, [activeDayId]: false }));
   };
 
   // ── 交通查询 ──
@@ -966,6 +970,8 @@ export default function TripDetail() {
     setFromResult(null); setToResult(null); setRouteInfo(null);
     setTransportPrice('');
     clearTempMarker(); await load();
+    // 添加成功后自动关闭编辑面板
+    setEditExpanded(prev => ({ ...prev, [activeDayId]: false }));
   };
 
   const globalOptimizing = useState(false)[0];
@@ -1101,14 +1107,14 @@ export default function TripDetail() {
                   <div style={{ display: 'flex', gap: 4 }}>
                     {/* V6.2b:独立的收起/展开按钮 */}
                     <button
-                      onClick={(e) => { e.stopPropagation(); setDetailExpanded(prev => ({ ...prev, [d.id]: !detOpen })); }}
+                      onClick={(e) => { e.stopPropagation(); setDetailExpanded(prev => ({ ...prev, [d.id]: !detOpen })); setEditExpanded({}); }}
                       title={detOpen ? '收起当日行程' : '展开当日行程'}
                       style={{ background: 'rgba(255,255,255,0.12)', color: '#ddd', border: 'none', borderRadius: 4, padding: '4px 8px', fontSize: 12, cursor: 'pointer' }}
                     >
                       {detOpen ? '▲ 收起' : '▼ 展开'}
                     </button>
                     <button
-                      onClick={(e) => { e.stopPropagation(); setActiveDayId(d.id); setActiveTab('scenic'); setDetailExpanded(prev => ({ ...prev, [d.id]: false })); setEditExpanded(prev => ({ ...prev, [d.id]: !prev[d.id] })); }}
+                      onClick={(e) => { e.stopPropagation(); setActiveDayId(d.id); setActiveTab('scenic'); setDetailExpanded({}); setEditExpanded({ [d.id]: true }); }}
                       style={{ background: '#1677ff', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}
                     >
                       + 添加
