@@ -598,23 +598,6 @@ export default function TripDetail() {
   };
 
   /** 应用已确认的全局优化(起点终点不动,仅移动中间景点) */
-  /** 根据 optimizePreview 反推优化后的完整序列(酒店+景点,按链顺序) */
-  const buildOptimizedAll = () => {
-    if (!optimizePreview) return null;
-    const chainNames = optimizePreview.chain.map((c) => c.name);
-    const ordered = chainNames
-      .map((name) => {
-        const isHotel = String(name).startsWith('🏨');
-        const rawName = isHotel ? String(name).slice(2) : name;
-        for (const ds of daySummaries) {
-          const found = ds.items.find((it) => it.poi?.name === rawName);
-          if (found && found.poi) return { poi: found.poi, daySeq: ds.day.daySeq, itemId: found.id, hotel: isHotel || found.itemType === 'hotel' };
-        }
-        return null;
-      })
-      .filter(Boolean) as Array<{ poi: Poi; daySeq: number; itemId: string; hotel: boolean }>;
-    return ordered;
-  };
 
   const applyGlobalOptimize = async () => {
     if (!id || !optimizePreview) return;
@@ -661,13 +644,19 @@ export default function TripDetail() {
   };
 
   /** 复制优化后的行程到新旅程(不改当前行程) */
+  /** 复制优化后的行程到新旅程(不改当前行程):包含所有景点+酒店,被移动的项用优化后daySeq */
   const copyOptimizedToNewTrip = async () => {
-    if (!optimizePreview || !trip) return;
-    const ordered = buildOptimizedAll();
-    if (!ordered || ordered.length === 0) { alert('暂无可复制的景点'); return; }
-
+    if (!trip) return;
     const title = prompt('新旅程标题:', `${trip.title}(优化版)`);
     if (title === null) return;
+
+    // 构建移动映射:poiName -> toDay (从 moves 提取)
+    const moveMap = new Map<string, number>();
+    if (optimizePreview) {
+      for (const mv of optimizePreview.moves) {
+        moveMap.set(mv.poiName, mv.toDay);
+      }
+    }
 
     try {
       // 1. 创建新旅程(自动生成天数骨架)
@@ -682,40 +671,53 @@ export default function TripDetail() {
       });
       const newDays = await db.listDays(newTrip.id);
 
-      // 2. 按优化后的 daySeq 把景点写入对应天
-      for (const item of ordered) {
-        const targetDay = newDays.find((nd) => nd.daySeq === item.daySeq);
-        if (!targetDay) continue;
-        const poiId = item.poi.id || crypto.randomUUID();
-        await db.upsertPoi({ ...item.poi, id: poiId, category: item.hotel ? 'hotel' : 'poi' });
-        await db.addItem({
-          dayId: targetDay.id,
-          poiId,
-          itemType: item.hotel ? 'hotel' : 'poi',
-          transportMode: 'walk',
-          note: item.poi.name,
-          visitMinutes: 90,
-        });
-        if (item.hotel && item.poi.lng && item.poi.lat) {
-          await db.addHotel({
-            tripId: newTrip.id,
-            name: item.poi.name,
-            address: item.poi.address,
-            lng: item.poi.lng,
-            lat: item.poi.lat,
-            checkIn: targetDay.date,
-            checkOut: targetDay.date,
+      // 2. 遍历当前所有天的所有景点+酒店,按优化后的daySeq写入
+      let copiedItems = 0;
+      const usedDaySeqs = new Set<number>();
+      for (const ds of daySummaries) {
+        for (const it of ds.items) {
+          // 计算目标daySeq:被移动的项用moveMap,其余保持原daySeq
+          const targetDaySeq = (it.poi?.name && moveMap.has(it.poi.name)) ? moveMap.get(it.poi.name)! : ds.day.daySeq;
+          usedDaySeqs.add(targetDaySeq);
+          const targetDay = newDays.find((nd) => nd.daySeq === targetDaySeq);
+          if (!targetDay) continue;
+
+          // 写入POI
+          const poiId = it.poiId || crypto.randomUUID();
+          if (it.poi) await db.upsertPoi({ ...it.poi, id: poiId });
+
+          // 写入行程项
+          await db.addItem({
+            dayId: targetDay.id,
             poiId,
+            itemType: it.itemType,
+            transportMode: it.transportMode,
+            note: it.note,
+            visitMinutes: it.visitMinutes,
           });
+          copiedItems++;
+
+          // 如果是酒店,同时写入 hotels 表
+          if (it.itemType === 'hotel' && it.poi?.lng && it.poi?.lat) {
+            await db.addHotel({
+              tripId: newTrip.id,
+              name: it.poi.name,
+              address: it.poi.address,
+              lng: it.poi.lng,
+              lat: it.poi.lat,
+              checkIn: targetDay.date,
+              checkOut: targetDay.date,
+              poiId,
+            });
+          }
         }
       }
 
-      // 3. 删除新旅程中没有任何景点的空天
-      const filledDaySeqs = new Set(ordered.map((o) => o.daySeq));
+      if (copiedItems === 0) { alert('暂无可复制的景点'); await db.deleteTrip(newTrip.id); return; }
+
+      // 3. 删除新旅程中的空天
       for (const nd of [...newDays]) {
-        if (!filledDaySeqs.has(nd.daySeq)) {
-          await db.removeDay(nd.id).catch(() => {});
-        }
+        if (!usedDaySeqs.has(nd.daySeq)) await db.removeDay(nd.id).catch(() => {});
       }
 
       // 4. 天内部顺路优化(静默)
@@ -727,7 +729,7 @@ export default function TripDetail() {
       }
 
       setOptimizePreview(null);
-      const ok = confirm(`✅ 已创建新旅程「${title}」。是否立即打开查看?`);
+      const ok = confirm(`✅ 已创建新旅程「${title}」:共 ${copiedItems} 个景点+酒店。是否立即打开查看?`);
       if (ok) navigate(`/trip/${newTrip.id}`);
     } catch (e: any) {
       alert('复制失败: ' + (e?.message || '未知错误'));
