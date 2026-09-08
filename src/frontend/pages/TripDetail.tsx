@@ -502,6 +502,9 @@ export default function TripDetail() {
       }
     }
     // 默认:起点=第一天锚点,终点=最后一天锚点
+    console.log('%c[诊断] 引擎输入', 'color:#ff9800;font-weight:bold');
+    console.log('  days:', dayAnchors.map(d => `D${d.daySeq}:${d.city || '∅'}(${d.poi.name})`).join(' | '));
+    console.log('  pois:', reloaded.map(p => `${p.poi.name}[${p.city || '∅'}]`).join(' | '));
     setOptimizeSetup({ days: dayAnchors, pois: reloaded, startIdx: 0, endIdx: dayAnchors.length - 1 });
   };
 
@@ -543,6 +546,14 @@ export default function TripDetail() {
         transitionRoutes,
         routeDeviationKm: 30,
       });
+
+      // 诊断:输出引擎分配结果
+      console.log('%c[诊断] 引擎分配', 'color:#4caf50;font-weight:bold');
+      console.log('  assignments:', result.assignments.map(a => {
+        const p = pois.find((x) => x.id === a.poiId);
+        return `${p?.poi.name || a.poiId} → Day${a.daySeq}${p && p.srcDaySeq !== a.daySeq ? `(原D${p.srcDaySeq}已移动)` : ''}`;
+      }).join(' | '));
+      console.log('  unassigned:', result.unassigned.map(u => u.name).join(', ') || '无');
 
       // 收集未分配警告
       if (result.unassigned.length > 0) {

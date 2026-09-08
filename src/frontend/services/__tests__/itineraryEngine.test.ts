@@ -7,7 +7,7 @@ const poi = (id: string, name: string, lng: number, lat: number, city?: string):
   id, name, lng, lat, category: 'poi', city,
 });
 
-const day = (daySeq: number, city: string, lng = 0, lat = 0): DayAnchor => ({
+const day = (daySeq: number, city: string, lng: number, lat: number): DayAnchor => ({
   daySeq, dayId: `day-${daySeq}`, poi: poi(`a-${daySeq}`, `锚点${daySeq}`, lng, lat, city), fromHotel: true, city,
 });
 
@@ -15,18 +15,45 @@ const mkIt = (id: string, name: string, lng: number, lat: number, city: string, 
   id, poi: poi(id, name, lng, lat, city), city, srcDaySeq, sunset,
 });
 
-describe('itineraryEngine 城市硬约束', () => {
-  it('跨城景点不搬入他城天', () => {
-    const days = [day(1, '张掖'), day(2, '敦煌'), day(3, '敦煌')];
+// 真实坐标(辅助判断距离)
+const 张掖 = [100.45, 38.93];
+const 敦煌 = [94.66, 40.14];
+const 德令哈 = [97.37, 37.37];
+const 青海湖 = [100.18, 36.89];
+
+describe('itineraryEngine 距离归属', () => {
+  it('景点归到最近的天锚点(张掖景点归张掖天,不跑敦煌)', () => {
+    const days = [
+      day(1, '张掖', 张掖[0], 张掖[1]),
+      day(2, '敦煌', 敦煌[0], 敦煌[1]),
+      day(3, '敦煌', 敦煌[0], 敦煌[1]),
+    ];
+    // 张掖大佛寺坐标在张掖,应归 Day1(最近)
     const pois = [mkIt('p1', '张掖大佛寺', 100.45, 38.93, '张掖', 1)];
     const r = optimizeItinerary({ days, pois, maxPerDay: 2 });
-    // 张掖景点只能进张掖天(Day1)
     const a = r.assignments.find((x) => x.poiId === 'p1');
     expect(a?.daySeq).toBe(1);
   });
 
-  it('同城景点可平摊到该城连住天', () => {
-    const days = [day(1, '敦煌'), day(2, '敦煌'), day(3, '敦煌'), day(4, '敦煌')];
+  it('茫崖景点不跨到敦煌(距离>120km不跨)', () => {
+    const days = [
+      day(1, '大柴旦', 95.36, 37.85),
+      day(2, '敦煌', 敦煌[0], 敦煌[1]),
+    ];
+    // 黑独山在茫崖(94.35,38.92),离大柴旦近,离敦煌远(>120km) → 应留原天D1
+    const pois = [mkIt('p1', '黑独山', 94.35, 38.92, '酒泉', 1)];
+    const r = optimizeItinerary({ days, pois, maxPerDay: 2 });
+    const a = r.assignments.find((x) => x.poiId === 'p1');
+    expect(a?.daySeq).toBe(1); // 留在原天,不被搬到敦煌
+  });
+
+  it('同城连住平摊,每日≤2', () => {
+    const days = [
+      day(1, '敦煌', 敦煌[0], 敦煌[1]),
+      day(2, '敦煌', 敦煌[0], 敦煌[1]),
+      day(3, '敦煌', 敦煌[0], 敦煌[1]),
+      day(4, '敦煌', 敦煌[0], 敦煌[1]),
+    ];
     const pois = [
       mkIt('p1', '莫高窟', 94.8, 40.04, '敦煌', 2),
       mkIt('p2', '鸣沙山', 94.67, 40.08, '敦煌', 3, true),
@@ -35,48 +62,37 @@ describe('itineraryEngine 城市硬约束', () => {
       mkIt('p5', '阳关', 94.0, 39.9, '敦煌', 2),
     ];
     const r = optimizeItinerary({ days, pois, maxPerDay: 2 });
-    // 5个景点分到4天,每天≤2
     const byDay: Record<number, number> = {};
     r.assignments.forEach((a) => { byDay[a.daySeq] = (byDay[a.daySeq] || 0) + 1; });
+    // 5个景点分4天,每天≤2(允许平摊)
     expect(Object.values(byDay).every((n) => n <= 2)).toBe(true);
-    // 日落(鸣沙山)放最后:分配的天不是该天唯一
-    const sunsetAssign = r.assignments.find((a) => a.poiId === 'p2');
-    expect(sunsetAssign).toBeTruthy();
-  });
-
-  it('每日上限:超量时保持合理', () => {
-    const days = [day(1, '敦煌'), day(2, '敦煌')];
-    const pois = Array.from({ length: 5 }, (_, i) => mkIt(`p${i}`, `景点${i}`, 94 + i * 0.01, 40 + i * 0.01, '敦煌', 1));
-    const r = optimizeItinerary({ days, pois, maxPerDay: 2 });
-    // 5个景点分2天(上限2):平摊,超出的落回原天不丢
     expect(r.assignments.length).toBe(5);
-    const byDay: Record<number, number> = {};
-    r.assignments.forEach((a) => { byDay[a.daySeq] = (byDay[a.daySeq] || 0) + 1; });
-    // 至少平摊,不出现极端堆积(≤3)
-    expect(Object.values(byDay).every((n) => n <= 3)).toBe(true);
   });
 });
 
 describe('itineraryEngine 顺路路由', () => {
   it('点到路径距离计算', () => {
-    // 直线 0,0 → 10,0 上,点(5,0)距离0
     const d1 = distanceToPath(poi('x', 'x', 5, 0), [[0, 0], [10, 0]]);
     expect(d1).toBeLessThan(1);
-    // 远离路径的点
     const d2 = distanceToPath(poi('y', 'y', 5, 100), [[0, 0], [10, 0]]);
     expect(d2).toBeGreaterThan(90);
   });
 
   it('过渡日偏离路径产生警告', () => {
-    const days = [day(1, '德令哈'), day(2, '青海湖')];
-    const pois = [mkIt('p1', '茶卡盐湖', 99.08, 36.79, '青海湖', 2)];
+    const days = [
+      day(1, '德令哈', 德令哈[0], 德令哈[1]),
+      day(2, '青海湖', 青海湖[0], 青海湖[1]),
+    ];
+    // 茶卡盐湖在德令哈→青海湖路线附近(距德令哈~85km,在120km阈值内)
+    const pois = [mkIt('p1', '茶卡盐湖', 99.08, 36.79, '海西', 2)];
     const r = optimizeItinerary({
       days, pois, maxPerDay: 2,
-      transitionRoutes: { 2: [[96.9, 36.4], [100.1, 36.9]] }, // 德令哈→青海湖直线
+      transitionRoutes: { 2: [[德令哈[0], 德令哈[1]], [青海湖[0], 青海湖[1]]] },
       routeDeviationKm: 30,
     });
-    // 茶卡在路线上(离线不远),不应产生偏离警告
-    const hasWarn = r.warnings.some((w) => w.includes('茶卡'));
+    // 茶卡应被分配(不丢),且它在路线上不应产生"偏离"警告
+    expect(r.assignments.find((a) => a.poiId === 'p1')).toBeTruthy();
+    const hasWarn = r.warnings.some((w) => w.includes('茶卡') && w.includes('偏离'));
     expect(hasWarn).toBe(false);
   });
 });

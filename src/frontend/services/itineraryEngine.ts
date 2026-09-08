@@ -49,10 +49,10 @@ const DEFAULT_DEVIATION = 30;
 
 /**
  * 主引擎
- * 1. 城市绑定:景点归属到「同城的天」
- * 2. 硬约束:景点只能进城市匹配的天(跨城禁止)
- * 3. 连住平摊:同城连续天均分,每日≤maxPerDay,日落放最后
- * 4. 过渡日顺路:有 transitionRoutes 时校验景点偏离路径
+ * 核心:按「地理距离」归属(城市字符串匹配不可靠,逆地理的"酒泉市"会覆盖几百公里外的茫崖)
+ * 1. 每个景点归到「离它最近的天锚点」,且距离在合理阈值内(否则保持原天)
+ * 2. 同城连住多天时,平摊(每日≤maxPerDay),日落放最后
+ * 3. 过渡日顺路:有 transitionRoutes 时校验景点偏离路径
  */
 export function optimizeItinerary(input: ItineraryInput): ItineraryResult {
   const maxPerDay = input.maxPerDay ?? DEFAULT_MAX;
@@ -60,28 +60,12 @@ export function optimizeItinerary(input: ItineraryInput): ItineraryResult {
   const days = [...input.days].sort((a, b) => a.daySeq - b.daySeq);
   const result: ItineraryResult = { assignments: [], unassigned: [], warnings: [] };
 
-  // 1. 每个景点归属城市(优先 poi.city,无则用原天锚点城市)
-  const cityOfDay = new Map<number, string>();
-  for (const d of days) {
-    cityOfDay.set(d.daySeq, d.city || d.poi.city || '');
-  }
-  const poiCity = (p: ItineraryPoi): string => {
-    if (p.city) return p.city;
-    return cityOfDay.get(p.srcDaySeq) || '';
-  };
+  // 地理距离:点到天锚点距离
+  const distToDay = (poi: Poi, d: DayAnchor): number =>
+    haversineKm(poi.lng, poi.lat, d.poi.lng, d.poi.lat);
 
-  // 2. 收集每个景点的候选天(城市匹配的天)
-  const candidatesFor = (p: ItineraryPoi): DayAnchor[] => {
-    const c = poiCity(p);
-    return days.filter((d) => {
-      const dc = cityOfDay.get(d.daySeq) || '';
-      // 城市匹配:都有城市则必须同城;无城市则允许任意(老数据兜底)
-      if (c && dc && c !== dc) return false;
-      return true;
-    });
-  };
-
-  // 3. 平摊分配
+  // 归属:优先「离景点最近的天锚点」;若该天满,找次近的;距离阈值内才允许跨天
+  const MAX_CROSS_KM = 120; // 超过120km不跨天(防止黑独山从大柴旦跑到敦煌)
   const usage = new Map<number, number>();
   days.forEach((d) => usage.set(d.daySeq, 0));
 
@@ -89,30 +73,31 @@ export function optimizeItinerary(input: ItineraryInput): ItineraryResult {
   const pois = [...input.pois].sort((a, b) => (a.sunset === b.sunset ? 0 : a.sunset ? 1 : -1));
 
   for (const p of pois) {
-    const cands = candidatesFor(p);
-    if (cands.length === 0) {
-      result.unassigned.push({ poiId: p.id, name: p.poi.name, reason: '无匹配城市的天' });
-      continue;
-    }
-    // 选择"未满 + 用量最少"的天
+    // 候选天 = 距离 ≤ MAX_CROSS_KM 的天(避免跨城乱搬)
+    const feasible = days
+      .map((d) => ({ d, dist: distToDay(p.poi, d), usage: usage.get(d.daySeq) ?? 0 }))
+      .filter((r) => r.dist <= MAX_CROSS_KM);
+
+    // 平摊优先:在候选天中选「用量最少」的(距离相近时均衡分布);距离作为次级排序
     let best: DayAnchor | null = null;
     let bestUsage = Infinity;
-    for (const d of cands) {
-      const u = usage.get(d.daySeq) ?? 0;
-      if (u < maxPerDay && u < bestUsage) {
-        bestUsage = u;
-        best = d;
+    for (const r of feasible.sort((a, b) => a.usage - b.usage || a.dist - b.dist)) {
+      if (r.usage >= maxPerDay) continue; // 已满跳过
+      if (r.usage < bestUsage) {
+        bestUsage = r.usage;
+        best = r.d;
       }
     }
+
     if (!best) {
-      // 所有候选天都满了 → 放回原天(保底,不丢)
+      // 无候选(都超120km 或 全满) → 保持原天(不丢、不乱搬)
       const fallback = days.find((d) => d.daySeq === p.srcDaySeq);
       if (fallback) {
         usage.set(fallback.daySeq, (usage.get(fallback.daySeq) ?? 0) + 1);
         result.assignments.push({ poiId: p.id, daySeq: fallback.daySeq });
-        result.warnings.push(`「${p.poi.name}」所在城市已满,留在原天(Day ${fallback.daySeq})。`);
+        result.warnings.push(`「${p.poi.name}」近处已满或无匹配,留在原天(Day ${fallback.daySeq})。`);
       } else {
-        result.unassigned.push({ poiId: p.id, name: p.poi.name, reason: '无可用天' });
+        result.unassigned.push({ poiId: p.id, name: p.poi.name, reason: '无可归天' });
       }
       continue;
     }
@@ -120,7 +105,7 @@ export function optimizeItinerary(input: ItineraryInput): ItineraryResult {
     result.assignments.push({ poiId: p.id, daySeq: best.daySeq });
   }
 
-  // 4. 过渡日顺路校验(可选)
+  // 过渡日顺路校验(可选)
   if (input.transitionRoutes) {
     for (const a of result.assignments) {
       const route = input.transitionRoutes[a.daySeq];
