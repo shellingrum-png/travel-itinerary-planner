@@ -22,6 +22,26 @@ export interface PoiSearchResult {
 
 import { loadPlaceSearch, loadRoutePlanner, loadGeocoder } from './amapLoader';
 
+/** 地名→枢纽坐标 的会话内缓存(含负缓存) */
+const hubCoordCache = new Map<string, [number, number] | null>();
+
+/** 解析交通枢纽(机场/车站)坐标:对地名地理编码,加「机场/火车站」后缀提升命中率;失败→null */
+export async function resolveTransportHubCoord(place: string, mode?: string): Promise<[number, number] | null> {
+  if (!place) return null;
+  const kw = place + (mode === 'flight' ? '机场' : mode === 'train' ? '火车站' : '');
+  if (hubCoordCache.has(kw)) return hubCoordCache.get(kw) ?? null;
+  try {
+    const pois = await searchPoiByJS(kw);
+    const hit = pois.find((p) => p.lng && p.lat);
+    const coord = hit ? ([hit.lng, hit.lat] as [number, number]) : null;
+    hubCoordCache.set(kw, coord);
+    return coord;
+  } catch {
+    hubCoordCache.set(kw, null);
+    return null;
+  }
+}
+
 /** 使用高德 JS API PlaceSearch（无需 Web 服务 Key） */
 export async function searchPoiByJS(keyword: string, city?: string): Promise<PoiSearchResult[]> {
   const PlaceSearch = await loadPlaceSearch();

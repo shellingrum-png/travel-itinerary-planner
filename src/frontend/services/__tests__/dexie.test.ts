@@ -119,4 +119,25 @@ describe('Dexie 数据层', () => {
 
     await travelDb.deleteTrip(trip.id);
   });
+
+  it('updateExpense 修改金额(不改 dirty)', async () => {
+    const trip = await travelDb.createTrip({
+      title: '改价测试',
+      destination: '西安',
+      startDate: '2026-10-01',
+      endDate: '2026-10-01',
+      companionCount: 1,
+      currency: 'CNY',
+    });
+
+    const exp = await travelDb.addExpense({ tripId: trip.id, category: 'ticket', amount: 120, currency: 'CNY', date: '2026-10-01' });
+    expect(exp.dirty).toBe(0);
+
+    await travelDb.updateExpense(exp.id, { amount: 299 });
+    const updated = (await travelDb.listExpenses(trip.id))[0];
+    expect(updated.amount).toBe(299);
+    expect(updated.dirty).toBe(0); // 仅改金额,同步标记不变
+
+    await travelDb.deleteTrip(trip.id);
+  });
 });

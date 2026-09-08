@@ -38,6 +38,7 @@ export interface Db {
   // expenses
   listExpenses(tripId: string): Promise<Expense[]>;
   addExpense(exp: Omit<Expense, 'id' | 'dirty'>): Promise<Expense>;
+  updateExpense(id: string, patch: Partial<Expense>): Promise<void>;
   removeExpense(id: string): Promise<void>;
   /** 已花合计(按币种汇总,V1 单币种) */
   sumExpenses(tripId: string): Promise<number>;

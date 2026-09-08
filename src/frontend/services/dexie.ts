@@ -259,6 +259,10 @@ class TravelDb extends Dexie implements Db {
     return created;
   }
 
+  async updateExpense(id: string, patch: Partial<Expense>): Promise<void> {
+    await this.expenses.update(id, patch);
+  }
+
   async removeExpense(id: string): Promise<void> {
     await this.expenses.delete(id);
   }

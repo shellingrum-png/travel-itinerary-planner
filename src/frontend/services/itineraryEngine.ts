@@ -7,7 +7,8 @@
  * 纯函数,可单测,不依赖高德。
  */
 import { haversineKm } from '../utils/tsp';
-import type { Poi } from '../types';
+import { toMinutes } from '../utils/time';
+import type { Poi, Transport } from '../types';
 
 // ── 类型 ──
 /** 每天锚点骨架 */
@@ -34,6 +35,7 @@ export interface ItineraryInput {
   pois: ItineraryPoi[];
   maxPerDay?: number;          // 每日景点上限(松弛=2)
   dayCapacity?: Record<number, number>; // V6.3.2 按天容量:daySeq → 该天可放景点数(优先于 maxPerDay)
+  forbiddenDays?: Record<string, number[]>; // V6.3.4 poiId → 禁止分配的天(距离感知可达性)
   transitionRoutes?: Record<number, [number, number][]>; // daySeq → 行车路径点
   routeDeviationKm?: number;   // 顺路偏离阈值(默认30)
 }
@@ -79,10 +81,11 @@ export function optimizeItinerary(input: ItineraryInput): ItineraryResult {
   const pois = [...input.pois].sort((a, b) => (a.sunset === b.sunset ? 0 : a.sunset ? 1 : -1));
 
   for (const p of pois) {
-    // 候选天 = 距离 ≤ MAX_CROSS_KM 的天(避免跨城乱搬)
+    // 候选天 = 距离 ≤ MAX_CROSS_KM 且未被「禁配」(forbiddenDays)的天
     const feasible = days
       .map((d) => ({ d, dist: distToDay(p.poi, d), usage: usage.get(d.daySeq) ?? 0 }))
-      .filter((r) => r.dist <= MAX_CROSS_KM);
+      .filter((r) => r.dist <= MAX_CROSS_KM)
+      .filter((r) => !input.forbiddenDays?.[p.id]?.includes(r.d.daySeq));
 
     // 平摊优先:在候选天中选「用量最少」的(距离相近时均衡分布);距离作为次级排序
     let best: DayAnchor | null = null;
@@ -170,4 +173,128 @@ export function groupConsecutiveDays(days: DayAnchor[]): DayAnchor[][] {
   }
   if (cur.length) groups.push(cur);
   return groups;
+}
+
+// ── V6.3.3 动态容量:基于返程/去程大交通估算 ──
+
+/** 按大交通 mode 预留的赶车/赶飞机 buffer(分钟) */
+const MODE_BUFFER: Partial<Record<Transport['mode'], number>> = {
+  flight: 120,
+  train: 45,
+  drive: 15,
+  ferry: 30,
+};
+
+/** 从 "YYYY-MM-DDTHH:MM" 拆出 {date, hhmm};hhmm 非法则视为无效 */
+function parseIso(iso: string): { date: string; hhmm: string } | null {
+  const s = String(iso ?? '');
+  const [d, t] = s.split('T');
+  if (!d || !t || !/^\d{1,2}:\d{2}$/.test(t)) return null;
+  return { date: d, hhmm: t };
+}
+
+/** 按「日期」匹配一条返程交通,取 departAt 最晚(同分偏好 round_trip);无匹配→null */
+export function findReturnTransport(ts: Transport[], lastDate: string, preferRoundTrip = true): Transport | null {
+  let best: Transport | null = null;
+  let bestScore = -Infinity;
+  for (const t of ts) {
+    if (t.segType !== 'round_trip' && t.segType !== 'inter_city') continue;
+    const p = parseIso(t.departAt);
+    if (!p || p.date !== lastDate) continue;
+    const isRound = t.segType === 'round_trip';
+    const score = toMinutes(p.hhmm) * 2 + (isRound && preferRoundTrip ? 1 : 0);
+    if (score > bestScore) { bestScore = score; best = t; }
+  }
+  return best;
+}
+
+/** 按「日期」匹配一条去程交通,取 arriveAt 最早(同分偏好 round_trip);无匹配→null */
+export function findDepartTransport(ts: Transport[], firstDate: string, preferRoundTrip = true): Transport | null {
+  let best: Transport | null = null;
+  let bestScore = Infinity;
+  for (const t of ts) {
+    if (t.segType !== 'round_trip' && t.segType !== 'inter_city') continue;
+    const p = parseIso(t.arriveAt);
+    if (!p || p.date !== firstDate) continue;
+    const isRound = t.segType === 'round_trip';
+    const score = toMinutes(p.hhmm) * 2 - (isRound && preferRoundTrip ? 1 : 0);
+    if (score < bestScore) { bestScore = score; best = t; }
+  }
+  return best;
+}
+
+/**
+ * 计算出发/回程日的可用窗口(分钟)。
+ * transport=null 或时间格式坏 → null(调用方回退普通天);可用 ≤ 0 → 纯赶路日。
+ */
+export function dayWindowMin(args: {
+  segType: 'depart' | 'return';
+  transport: Transport | null;
+  dayStart: string;   // HH:MM
+  dayEnd: string;     // HH:MM
+  buffers?: Partial<Record<Transport['mode'], number>>;
+}): number | null {
+  const { segType, transport, dayStart, dayEnd } = args;
+  if (!transport) return null;
+  const buffers = { ...MODE_BUFFER, ...args.buffers };
+  const buffer = buffers[transport.mode] ?? 45;
+  const iso = segType === 'return' ? transport.departAt : transport.arriveAt;
+  const p = parseIso(iso);
+  if (!p) return null;
+  const boundary = segType === 'return' ? toMinutes(p.hhmm) - buffer : toMinutes(dayEnd) - buffer;
+  const start = segType === 'return' ? toMinutes(dayStart) : toMinutes(p.hhmm);
+  return boundary - start;
+}
+
+/**
+ * 按大交通(mode + 起抵时间)动态估算某天可排景点数。
+ * transport=null → 返回 fallback(默认 2,即普通天)。
+ */
+export function estimateDayCapacity(args: {
+  segType: 'depart' | 'return';
+  transport: Transport | null;
+  dayStart: string;   // HH:MM
+  dayEnd: string;     // HH:MM
+  avgPoiMin?: number; // 每景点耗时(游玩+通勤),默认 120
+  clampMax?: number;  // 默认 4
+  buffers?: Partial<Record<Transport['mode'], number>>;
+}): number {
+  const { segType, transport, dayStart, dayEnd } = args;
+  const avgPoiMin = args.avgPoiMin ?? 120;
+  const clampMax = args.clampMax ?? 4;
+  const win = dayWindowMin({ segType, transport, dayStart, dayEnd, buffers: args.buffers });
+  if (win === null) return 2; // 无大交通/格式坏 → 按普通天
+  if (win <= 0) return 0;     // 纯赶路日
+  return Math.min(clampMax, Math.floor(win / avgPoiMin));
+}
+
+/**
+ * 按实际往返路径耗时的可达性估算可排景点数(距离感知,H→P→A)。
+ * total(p) = pathMin + visitMin(pathMin=该景点起点→景点→终点的往返路径总时长)。
+ * - reachableIds:单项 total ≤ window 的景点
+ * - capacity:按 total 升序贪心累计(累计 ≤ window)能容纳的数量,clamp [0, clampMax]
+ */
+export function estimateReachablePois(args: {
+  candidates: Array<{ id: string; visitMin: number; pathMin: number }>;
+  windowMin: number;
+  clampMax?: number;
+}): { capacity: number; reachableIds: string[] } {
+  const { candidates, windowMin } = args;
+  const clampMax = args.clampMax ?? 4;
+  if (windowMin <= 0) return { capacity: 0, reachableIds: [] };
+  const total = (p: { id: string; visitMin: number; pathMin: number }) =>
+    (p.pathMin || 0) + (p.visitMin || 0);
+  const reachableIds = candidates
+    .filter((p) => total(p) <= windowMin)
+    .map((p) => p.id);
+  let acc = 0;
+  let capacity = 0;
+  const sorted = [...candidates].sort((a, b) => total(a) - total(b));
+  for (const p of sorted) {
+    const t = total(p);
+    if (acc + t > windowMin) break;
+    acc += t;
+    capacity++;
+  }
+  return { capacity: Math.min(clampMax, capacity), reachableIds };
 }

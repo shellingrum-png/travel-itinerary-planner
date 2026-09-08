@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { optimizeItinerary, distanceToPath } from '../itineraryEngine';
+import { optimizeItinerary, distanceToPath, estimateDayCapacity, estimateReachablePois, dayWindowMin, findReturnTransport, findDepartTransport } from '../itineraryEngine';
 import type { DayAnchor, ItineraryPoi } from '../itineraryEngine';
-import type { Poi } from '../../types';
+import type { Poi, Transport } from '../../types';
 
 const poi = (id: string, name: string, lng: number, lat: number, city?: string): Poi => ({
   id, name, lng, lat, category: 'poi', city,
@@ -117,5 +117,209 @@ describe('itineraryEngine 顺路路由', () => {
     expect(r.assignments.find((a) => a.poiId === 'p1')).toBeTruthy();
     const hasWarn = r.warnings.some((w) => w.includes('茶卡') && w.includes('偏离'));
     expect(hasWarn).toBe(false);
+  });
+});
+
+// ── V6.3.3 动态容量 ──
+const rt = (mode: Transport['mode'], depart: string, arrive: string, segType: Transport['segType'] = 'round_trip'): Transport => ({
+  id: 't1', tripId: 'trip', segType, mode, fromPlace: 'A', toPlace: 'B', departAt: depart, arriveAt: arrive,
+});
+
+describe('estimateDayCapacity', () => {
+  it('回程火车19:00,dayStart 09:00,avg 120 → 4', () => {
+    const cap = estimateDayCapacity({ segType: 'return', transport: rt('train', '2026-09-30T19:00', '2026-09-30T22:00'), dayStart: '09:00', dayEnd: '20:00', avgPoiMin: 120 });
+    expect(cap).toBe(4); // (19:00-45min - 09:00)=555 → 4
+  });
+
+  it('回程飞机12:00(early)→ 0', () => {
+    const cap = estimateDayCapacity({ segType: 'return', transport: rt('flight', '2026-09-30T12:00', '2026-09-30T15:00'), dayStart: '09:00', dayEnd: '20:00', avgPoiMin: 120 });
+    expect(cap).toBe(0); // (12:00-120 - 09:00)=60 → 0
+  });
+
+  it('回程火车19:00,dayStart 08:00 → 4', () => {
+    const cap = estimateDayCapacity({ segType: 'return', transport: rt('train', '2026-09-30T19:00', '2026-09-30T22:00'), dayStart: '08:00', dayEnd: '20:00', avgPoiMin: 120 });
+    expect(cap).toBe(4);
+  });
+
+  it('去程火车 arrive 10:00,dayEnd 20:00 → 4', () => {
+    const cap = estimateDayCapacity({ segType: 'depart', transport: rt('train', '2026-09-26T06:00', '2026-09-26T10:00'), dayStart: '09:00', dayEnd: '20:00', avgPoiMin: 120 });
+    expect(cap).toBe(4); // (20:00-45 - 10:00)=555 → 4
+  });
+
+  it('去程飞机 arrive 22:00 → 0', () => {
+    const cap = estimateDayCapacity({ segType: 'depart', transport: rt('flight', '2026-09-26T18:00', '2026-09-26T22:00'), dayStart: '09:00', dayEnd: '20:00', avgPoiMin: 120 });
+    expect(cap).toBe(0); // (20:00-120 - 22:00)<0 → 0
+  });
+
+  it('transport=null → 普通天容量2', () => {
+    expect(estimateDayCapacity({ segType: 'return', transport: null, dayStart: '09:00', dayEnd: '20:00', avgPoiMin: 120 })).toBe(2);
+  });
+
+  it('dayStart 06:00,火车 depart 22:00 → clamp 4', () => {
+    const cap = estimateDayCapacity({ segType: 'return', transport: rt('train', '2026-09-30T22:00', '2026-09-30T23:00'), dayStart: '06:00', dayEnd: '22:00', avgPoiMin: 120 });
+    expect(cap).toBe(4); // (22:00-45 - 06:00)=915 → 7 → clamp 4
+  });
+
+  it('departAt 格式坏 → 按普通天2', () => {
+    const cap = estimateDayCapacity({ segType: 'return', transport: rt('train', '', ''), dayStart: '09:00', dayEnd: '20:00', avgPoiMin: 120 });
+    expect(cap).toBe(2);
+  });
+});
+
+describe('findReturnTransport / findDepartTransport', () => {
+  const lastDate = '2026-09-30';
+  const firstDate = '2026-09-26';
+
+  it('findReturnTransport 取 departAt 最晚(含 inter_city);日期不匹配被过滤', () => {
+    const ts = [
+      rt('train', '2026-09-30T15:00', '2026-09-30T18:00'),
+      rt('train', '2026-09-30T19:00', '2026-09-30T22:00'),
+      rt('flight', '2026-09-29T10:00', '2026-09-29T12:00'), // 日期不匹配
+      { ...rt('train', '2026-09-30T20:00', '2026-09-30T23:00'), segType: 'inter_city' as const, id: 'x' }, // inter_city 命中
+    ];
+    const r = findReturnTransport(ts, lastDate);
+    expect(r?.departAt).toBe('2026-09-30T20:00'); // inter_city 20:00 最晚命中
+  });
+
+  it('findReturnTransport 同分偏好 round_trip', () => {
+    const ts = [
+      rt('train', '2026-09-30T20:00', '2026-09-30T23:00'), // round_trip 20:00
+      { ...rt('train', '2026-09-30T20:00', '2026-09-30T23:00'), segType: 'inter_city' as const, id: 'x' }, // inter_city 20:00
+    ];
+    expect(findReturnTransport(ts, lastDate)?.segType).toBe('round_trip');
+  });
+
+  it('findReturnTransport 仅 inter_city 也命中', () => {
+    const ts = [{ ...rt('flight', '2026-09-30T16:00', '2026-09-30T19:00'), segType: 'inter_city' as const, id: 'x' }];
+    expect(findReturnTransport(ts, lastDate)?.departAt).toBe('2026-09-30T16:00');
+  });
+
+  it('findDepartTransport 取 arriveAt 最早(含 inter_city);日期不匹配被过滤', () => {
+    const ts = [
+      rt('train', '2026-09-26T06:00', '2026-09-26T10:00'),
+      rt('train', '2026-09-26T05:00', '2026-09-26T08:00'),
+      rt('flight', '2026-09-25T10:00', '2026-09-25T12:00'), // 日期不匹配
+    ];
+    const r = findDepartTransport(ts, firstDate);
+    expect(r?.arriveAt).toBe('2026-09-26T08:00');
+  });
+
+  it('无匹配 → null', () => {
+    expect(findReturnTransport([], lastDate)).toBeNull();
+    expect(findDepartTransport([rt('train', '2026-09-30T06:00', '2026-09-30T10:00')], firstDate)).toBeNull();
+  });
+});
+
+describe('estimateReachablePois(pathMin)', () => {
+  it('贪心累计:w=300,total 105/150/225 → reachable 3、capacity 2', () => {
+    const r = estimateReachablePois({
+      candidates: [
+        { id: 'a', visitMin: 60, pathMin: 45 },  // total 105
+        { id: 'b', visitMin: 90, pathMin: 60 },  // total 150
+        { id: 'c', visitMin: 120, pathMin: 105 }, // total 225
+      ],
+      windowMin: 300,
+    });
+    expect(r.reachableIds).toEqual(['a', 'b', 'c']); // 105/150/225 ≤ 300
+    expect(r.capacity).toBe(2); // 105+150=255≤300, +225=480>300
+  });
+
+  it('w=400 → capacity 3(105+150+225=480>400→2? 实际105+150=255, +225=480>400 → 2)', () => {
+    const r = estimateReachablePois({
+      candidates: [
+        { id: 'a', visitMin: 60, pathMin: 45 },  // 105
+        { id: 'b', visitMin: 90, pathMin: 60 },  // 150
+        { id: 'c', visitMin: 120, pathMin: 105 }, // 225
+      ],
+      windowMin: 400,
+    });
+    expect(r.capacity).toBe(2); // 105+150=255≤400, +225=480>400
+  });
+
+  it('clampMax 生效', () => {
+    const r = estimateReachablePois({
+      candidates: Array.from({ length: 6 }, (_, i) => ({ id: `p${i}`, visitMin: 10, pathMin: 10 })), // 每个 total 20
+      windowMin: 9999,
+      clampMax: 2,
+    });
+    expect(r.capacity).toBe(2);
+  });
+
+  it('空输入 → {0, []}', () => {
+    expect(estimateReachablePois({ candidates: [], windowMin: 300 })).toEqual({ capacity: 0, reachableIds: [] });
+  });
+
+  it('全不可达 → capacity 0,reachableIds 空', () => {
+    const r = estimateReachablePois({
+      candidates: [
+        { id: 'a', visitMin: 60, pathMin: 0 },
+        { id: 'b', visitMin: 100, pathMin: 0 },
+      ],
+      windowMin: 10,
+    });
+    expect(r).toEqual({ capacity: 0, reachableIds: [] });
+  });
+
+  it('windowMin ≤ 0 → {0, []}', () => {
+    expect(estimateReachablePois({ candidates: [{ id: 'a', visitMin: 60, pathMin: 10 }], windowMin: 0 })).toEqual({ capacity: 0, reachableIds: [] });
+  });
+});
+
+describe('dayWindowMin', () => {
+  const dayStart = '09:00', dayEnd = '20:00';
+  it('return 火车 19:00 → 555', () => {
+    expect(dayWindowMin({ segType: 'return', transport: rt('train', '2026-09-30T19:00', '2026-09-30T22:00'), dayStart, dayEnd })).toBe(555);
+  });
+  it('return 飞行 12:00(buffer120) → 60-? 即 (12:00-120 - 09:00) = 60', () => {
+    expect(dayWindowMin({ segType: 'return', transport: rt('flight', '2026-09-30T12:00', '2026-09-30T15:00'), dayStart, dayEnd })).toBe(60);
+  });
+  it('depart 火车 arrive 10:00 → (20:00-45 - 10:00)=555', () => {
+    expect(dayWindowMin({ segType: 'depart', transport: rt('train', '2026-09-26T06:00', '2026-09-26T10:00'), dayStart, dayEnd })).toBe(555);
+  });
+  it('transport=null → null', () => {
+    expect(dayWindowMin({ segType: 'return', transport: null, dayStart, dayEnd })).toBeNull();
+  });
+  it('格式坏 → null', () => {
+    expect(dayWindowMin({ segType: 'return', transport: rt('train', '', ''), dayStart, dayEnd })).toBeNull();
+  });
+});
+
+describe('引擎 forbiddenDays', () => {
+  const 张掖A = [100.45, 38.93];
+  const 张掖B = [100.60, 38.95]; // 距 A 约 15km
+  const 张掖 = [100.50, 38.94]; // 介于 A/B 之间,更近 A
+  const 敦煌 = [94.66, 40.14];
+
+  it('禁最近的天后,改分到另一近天', () => {
+    const days = [
+      day(1, '张掖A', 张掖A[0], 张掖A[1]),
+      day(2, '张掖B', 张掖B[0], 张掖B[1]),
+    ];
+    // p1 距 D1(~8km)最远(D2 ~15km),原本最近是 D1;禁配 D1 → 应改分到 D2
+    const pois = [mkIt('p1', '七彩丹霞', 张掖[0], 张掖[1], '张掖', 1)];
+    const r = optimizeItinerary({ days, pois, maxPerDay: 2, forbiddenDays: { p1: [1] } });
+    expect(r.assignments.find((a) => a.poiId === 'p1')?.daySeq).toBe(2);
+  });
+
+  it('全禁时留原天+警告(不丢数据)', () => {
+    const days = [
+      day(1, '张掖A', 张掖A[0], 张掖A[1]),
+      day(2, '张掖B', 张掖B[0], 张掖B[1]),
+    ];
+    const pois = [mkIt('p1', '七彩丹霞', 张掖[0], 张掖[1], '张掖', 1)];
+    const r = optimizeItinerary({ days, pois, maxPerDay: 2, forbiddenDays: { p1: [1, 2] } });
+    const a = r.assignments.find((x) => x.poiId === 'p1');
+    expect(a?.daySeq).toBe(1); // 留原天
+    expect(r.warnings.some((w) => w.includes('七彩丹霞'))).toBe(true);
+  });
+
+  it('与 dayCapacity 叠加:全禁时仍留原天(不丢数据)', () => {
+    const days = [
+      day(1, '张掖A', 张掖A[0], 张掖A[1]),
+      day(2, '张掖B', 张掖B[0], 张掖B[1]),
+    ];
+    const pois = [mkIt('p1', '七彩丹霞', 张掖[0], 张掖[1], '张掖', 1)];
+    const r = optimizeItinerary({ days, pois, maxPerDay: 2, dayCapacity: { 1: 1, 2: 1 }, forbiddenDays: { p1: [1, 2] } });
+    expect(r.assignments.find((x) => x.poiId === 'p1')?.daySeq).toBe(1);
   });
 });
