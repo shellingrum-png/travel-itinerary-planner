@@ -68,6 +68,29 @@ describe('itineraryEngine 距离归属', () => {
     expect(Object.values(byDay).every((n) => n <= 2)).toBe(true);
     expect(r.assignments.length).toBe(5);
   });
+
+  it('按天容量:容量不足时优先保数据不丢,并给出警告', () => {
+    const days = [
+      day(1, '兰州', 103.8, 36.06),   // 出发日:容量1(赶飞机)
+      day(2, '张掖', 张掖[0], 张掖[1]), // 容量2
+      day(3, '青海湖', 青海湖[0], 青海湖[1]), // 回程日:容量1
+    ];
+    // 2个兰州景点离D1最近,但D1容量仅1 → 第2个应保留在D1(不丢)但产生警告
+    const pois = [
+      mkIt('p1', '中山桥', 103.8, 36.06, '兰州', 1),
+      mkIt('p2', '兰州牛肉面', 103.82, 36.05, '兰州', 1),
+      mkIt('p3', '张掖丹霞', 张掖[0], 张掖[1], '张掖', 2),
+      mkIt('p4', '茶卡', 青海湖[0], 青海湖[1], '青海湖', 3),
+    ];
+    const r = optimizeItinerary({
+      days, pois, maxPerDay: 2,
+      dayCapacity: { 1: 1, 2: 2, 3: 1 },
+    });
+    // 所有景点都不丢(保数据优先)
+    expect(r.assignments.length).toBe(4);
+    // 容量不足时有警告(提示用户调整)
+    expect(r.warnings.length).toBeGreaterThan(0);
+  });
 });
 
 describe('itineraryEngine 顺路路由', () => {

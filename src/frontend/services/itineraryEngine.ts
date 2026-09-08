@@ -33,6 +33,7 @@ export interface ItineraryInput {
   days: DayAnchor[];
   pois: ItineraryPoi[];
   maxPerDay?: number;          // 每日景点上限(松弛=2)
+  dayCapacity?: Record<number, number>; // V6.3.2 按天容量:daySeq → 该天可放景点数(优先于 maxPerDay)
   transitionRoutes?: Record<number, [number, number][]>; // daySeq → 行车路径点
   routeDeviationKm?: number;   // 顺路偏离阈值(默认30)
 }
@@ -56,9 +57,14 @@ const DEFAULT_DEVIATION = 30;
  */
 export function optimizeItinerary(input: ItineraryInput): ItineraryResult {
   const maxPerDay = input.maxPerDay ?? DEFAULT_MAX;
+  const dayCapacity = input.dayCapacity ?? {}; // 按天容量(优先于 maxPerDay)
   const deviation = input.routeDeviationKm ?? DEFAULT_DEVIATION;
   const days = [...input.days].sort((a, b) => a.daySeq - b.daySeq);
   const result: ItineraryResult = { assignments: [], unassigned: [], warnings: [] };
+
+  // 某天容量:优先按天容量,否则全局 maxPerDay
+  const capacityOf = (daySeq: number): number =>
+    dayCapacity[daySeq] ?? maxPerDay;
 
   // 地理距离:点到天锚点距离
   const distToDay = (poi: Poi, d: DayAnchor): number =>
@@ -82,7 +88,7 @@ export function optimizeItinerary(input: ItineraryInput): ItineraryResult {
     let best: DayAnchor | null = null;
     let bestUsage = Infinity;
     for (const r of feasible.sort((a, b) => a.usage - b.usage || a.dist - b.dist)) {
-      if (r.usage >= maxPerDay) continue; // 已满跳过
+      if (r.usage >= capacityOf(r.d.daySeq)) continue; // 该天容量已满跳过
       if (r.usage < bestUsage) {
         bestUsage = r.usage;
         best = r.d;

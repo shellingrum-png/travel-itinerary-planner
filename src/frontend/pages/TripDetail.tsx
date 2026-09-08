@@ -538,11 +538,18 @@ export default function TripDetail() {
         }
       }
 
-      // 调引擎:城市硬约束 + 连住平摊(每日≤2) + 过渡日顺路校验
+      // V6.3.2 按天容量:出发日、回程日预留赶飞机/赶车时间,只可游览1个景点(容量1);其他天容量2
+      const dayCapacity: Record<number, number> = {};
+      sortedDays.forEach((ds) => {
+        dayCapacity[ds] = (ds === startDay || ds === endDay) ? 1 : 2;
+      });
+
+      // 调引擎:地理距离归属 + 连住平摊(按天容量) + 过渡日顺路校验
       const result = optimizeItinerary({
         days,
         pois,
         maxPerDay: 2,
+        dayCapacity,
         transitionRoutes,
         routeDeviationKm: 30,
       });
