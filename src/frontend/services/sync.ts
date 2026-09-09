@@ -4,6 +4,7 @@
  * 设计:存储后端可插拔 —— 现在用自建后端(JSON文件),后续换 Supabase 只改 STORAGE 实现,业务逻辑不变。
  */
 import { db } from './db';
+import { getAccessToken } from './auth';
 import type { Trip, ItineraryDay, ItineraryItem, Poi, PoiAiCard, Expense, Hotel, Transport } from '../types';
 
 /** 单个旅程的完整数据快照 */
@@ -36,24 +37,30 @@ export interface SnapshotStorage {
 // ── 存储后端:自建 server(默认) ──
 const BACKEND_BASE = import.meta.env.VITE_SYNC_API || 'http://localhost:8766';
 
+// 带登录 token 的请求头(后端 /api/snapshot 需鉴权)
+async function authHeaders(extra: Record<string, string> = {}): Promise<Record<string, string>> {
+  const token = await getAccessToken();
+  return { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...extra };
+}
+
 class BackendSnapshotStorage implements SnapshotStorage {
   async save(tripId: string, snap: TripSnapshot): Promise<void> {
     await fetch(`${BACKEND_BASE}/api/snapshot/${tripId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(snap),
     });
   }
   async load(tripId: string): Promise<TripSnapshot | null> {
-    const res = await fetch(`${BACKEND_BASE}/api/snapshot/${tripId}`);
+    const res = await fetch(`${BACKEND_BASE}/api/snapshot/${tripId}`, { headers: await authHeaders() });
     if (!res.ok) return null;
     return res.json();
   }
   async remove(tripId: string): Promise<void> {
-    await fetch(`${BACKEND_BASE}/api/snapshot/${tripId}`, { method: 'DELETE' });
+    await fetch(`${BACKEND_BASE}/api/snapshot/${tripId}`, { method: 'DELETE', headers: await authHeaders() });
   }
   async list(): Promise<CloudTripRef[]> {
-    const res = await fetch(`${BACKEND_BASE}/api/snapshot`);
+    const res = await fetch(`${BACKEND_BASE}/api/snapshot`, { headers: await authHeaders() });
     return res.json();
   }
 }

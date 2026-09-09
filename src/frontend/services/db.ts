@@ -86,6 +86,9 @@ export interface Db {
   listTemplates(): Promise<TripTemplate[]>;
   getTemplate(id: string): Promise<TripTemplate | null>;
   upsertTemplate(tpl: TripTemplate): Promise<void>;
+
+  /** V10 多用户:清空本地用户数据(登录/登出时) */
+  clearAll(): Promise<void>;
 }
 
 // 占位导出,后续替换为 Dexie 实现

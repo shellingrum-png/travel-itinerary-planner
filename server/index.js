@@ -34,9 +34,13 @@ function loadEnv() {
 }
 const ENV = loadEnv();
 const SUPABASE_URL = ENV.SUPABASE_URL;
-const SUPABASE_KEY = ENV.SUPABASE_KEY;
+const SUPABASE_KEY = ENV.SUPABASE_KEY;         // service_role(服务端,绕过 RLS,勿下发)
+const SUPABASE_ANON_KEY = ENV.SUPABASE_ANON_KEY || ENV.VITE_SUPABASE_ANON_KEY || ''; // anon(校验 JWT 用)
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.warn('⚠️ 未配置 SUPABASE_URL/SUPABASE_KEY,快照功能将不可用(见 server/.env)');
+}
+if (!SUPABASE_ANON_KEY) {
+  console.warn('⚠️ 未配置 SUPABASE_ANON_KEY,登录鉴权将失效(前端 Auth 需用)');
 }
 // LLM 代理配置(key 收在服务端,不下发到前端)
 const LLM_BASE_URL = ENV.LLM_BASE_URL || 'https://api.deepseek.com/v1';
@@ -59,8 +63,26 @@ async function supabaseFetch(path, opts = {}) {
   return res;
 }
 
-// 快照存 Supabase:upsert 到 trips 表(snapshot jsonb 列)
-async function snapSave(tripId, snap) {
+// 调 Supabase Auth 校验 JWT,返回 user_id(成功)或 null(失败)
+// 用 REST /auth/v1/user 校验,保持 server 零 npm 依赖
+async function requireUser(req) {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (!token) return null;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { apikey: SUPABASE_ANON_KEY || SUPABASE_KEY, Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.id || null;
+  } catch {
+    return null;
+  }
+}
+
+// 快照存 Supabase:upsert 到 trips 表(snapshot jsonb 列),带 user_id 归属
+async function snapSave(userId, tripId, snap) {
   console.log(`[snapSave] 收到 ${tripId} 的备份请求(标题: ${snap.trip?.title || ''})`);
   try {
     await supabaseFetch('/trips', {
@@ -68,6 +90,7 @@ async function snapSave(tripId, snap) {
       headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
       body: JSON.stringify({
         id: tripId,
+        user_id: userId,
         title: snap.trip?.title || '',
         snapshot: snap,        // 完整快照放 jsonb
         updated_at: new Date().toISOString(),
@@ -77,27 +100,46 @@ async function snapSave(tripId, snap) {
   } catch (e) { console.warn('[snapSave] Supabase失败:', e.message); return false; }
 }
 
-async function snapLoad(tripId) {
+async function snapLoad(userId, tripId) {
   try {
-    const res = await supabaseFetch(`/trips?select=snapshot&id=eq.${encodeURIComponent(tripId)}&limit=1`);
+    const res = await supabaseFetch(`/trips?select=snapshot&id=eq.${encodeURIComponent(tripId)}&user_id=eq.${encodeURIComponent(userId)}&limit=1`);
     if (!res.ok) return null;
     const rows = await res.json();
     return rows?.[0]?.snapshot || null;
   } catch { return null; }
 }
 
-async function snapList() {
+// 旧数据迁移:首次登录的账号收养所有未归属(user_id 为空)的旅程
+// 返回迁移成功与否(幂等:之后 user_id=is.null 的查询返回空)
+async function adoptOrphans(userId) {
   try {
-    const res = await supabaseFetch('/trips?select=id,updated_at');
+    const res = await supabaseFetch('/trips?select=id&user_id=is.null');
+    if (!res.ok) return false;
+    const rows = await res.json();
+    if (!rows.length) return false;
+    await supabaseFetch('/trips?user_id=is.null', {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ user_id: userId }),
+    });
+    console.log(`[adoptOrphans] 将 ${rows.length} 条未归属旅程归给首个账号`);
+    return true;
+  } catch { return false; }
+}
+
+async function snapList(userId) {
+  await adoptOrphans(userId); // 首个账号领走旧数据
+  try {
+    const res = await supabaseFetch(`/trips?select=id,updated_at&user_id=eq.${encodeURIComponent(userId)}`);
     if (!res.ok) return [];
     const rows = await res.json();
     return rows.map((r) => ({ id: r.id, updatedAt: r.updated_at || null }));
   } catch { return []; }
 }
 
-async function snapRemove(tripId) {
+async function snapRemove(userId, tripId) {
   try {
-    await supabaseFetch(`/trips?id=eq.${encodeURIComponent(tripId)}`, { method: 'DELETE' });
+    await supabaseFetch(`/trips?id=eq.${encodeURIComponent(tripId)}&user_id=eq.${encodeURIComponent(userId)}`, { method: 'DELETE' });
     return true;
   } catch { return false; }
 }
@@ -133,7 +175,7 @@ function validate({ mode, from, to, date }) {
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 }
 
 function sendJson(res, status, obj) {
@@ -218,11 +260,13 @@ const server = http.createServer(async (req, res) => {
     } catch (e) { return sendJson(res, 500, { ok: false, error: `AMAP 代理失败: ${e.message}` }); }
   }
 
-  // 快照:列表 /:tripId (存 Supabase)
+  // 快照:列表 /:tripId (存 Supabase,需登录 + 按 user_id 隔离)
   if (url.pathname.startsWith('/api/snapshot')) {
-    // GET /api/snapshot → 列出所有已备份 tripId
+    const userId = await requireUser(req);
+    if (!userId) return sendJson(res, 401, { ok: false, error: '未登录' });
+    // GET /api/snapshot → 列出当前用户所有已备份 tripId
     if (url.pathname === '/api/snapshot' && req.method === 'GET') {
-      const ids = await snapList();
+      const ids = await snapList(userId);
       return sendJson(res, 200, ids);
     }
     // /api/snapshot/:tripId
@@ -231,16 +275,16 @@ const server = http.createServer(async (req, res) => {
       const tripId = match[1];
       if (req.method === 'PUT') {
         const body = await readBody(req);
-        await snapSave(tripId, body);
-        return sendJson(res, 200, { ok: true, tripId, savedAt: body.savedAt });
+        const ok = await snapSave(userId, tripId, body);
+        return sendJson(res, ok ? 200 : 500, ok ? { ok: true, tripId, savedAt: body.savedAt } : { ok: false, error: '备份失败' });
       }
       if (req.method === 'GET') {
-        const snap = await snapLoad(tripId);
+        const snap = await snapLoad(userId, tripId);
         if (!snap) return sendJson(res, 404, { ok: false, error: '快照不存在' });
         return sendJson(res, 200, snap);
       }
       if (req.method === 'DELETE') {
-        await snapRemove(tripId);
+        await snapRemove(userId, tripId);
         return sendJson(res, 200, { ok: true });
       }
     }

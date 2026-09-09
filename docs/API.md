@@ -149,8 +149,10 @@ async function getPoiCard(poi, city):
 | :--- | :--- |
 | `GET /api/health` | 健康检查 |
 | `GET /api/transport?mode=&from=&to=&date=` | 高铁/航班班次查询(python) |
-| `PUT/GET/DELETE /api/snapshot/:tripId` | 旅程快照备份/恢复(存 Supabase `trips.snapshot`) |
-| `GET /api/snapshot` | 快照列表 `[{id, updatedAt}]`(供前端 conflict 合并) |
+| `PUT/GET/DELETE /api/snapshot/:tripId` | 旅程快照备份/恢复(存 Supabase `trips.snapshot`,**需登录**) |
+| `GET /api/snapshot` | 快照列表 `[{id, updatedAt}]`(**需登录**,仅返回当前用户) |
+
+> **多用户鉴权(V10)**：`/api/snapshot*` 全部需 `Authorization: Bearer <Supabase access_token>`。后端用 `GET /auth/v1/user` 校验 token 拿 `user_id`,所有快照按 `user_id=eq.` 过滤;首次登录的首个账号会自动收养历史未归属数据。未带 token → `401`。
 | `POST /api/llm/chat/completions` | **LLM 代理**(key 在服务端,前端零泄露) |
 | `GET /api/amap/place?keywords=&city=` | **高德 Web 服务代理**(key 在服务端) |
 

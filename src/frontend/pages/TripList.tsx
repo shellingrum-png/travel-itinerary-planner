@@ -5,6 +5,7 @@ import type { Trip } from '../types';
 import seedData from '../seed.json';
 import CreateWizard from '../components/CreateWizard';
 import { listBackedUpTrips, restoreTrip, reconcile } from '../services/sync';
+import { isAuthConfigured, signOut } from '../services/auth';
 import { C, btn, btnGhost, btnSmall } from '../components/ui';
 
 export default function TripList() {
@@ -116,6 +117,15 @@ export default function TripList() {
     <div style={{ maxWidth: 600, margin: '0 auto', padding: 24 }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>我的旅程</h1>
       <p style={{ color: '#9a9ab0', fontSize: 13, marginTop: 0, marginBottom: 20 }}>规划 · 优化 · 记账 · 云备份</p>
+
+      {isAuthConfigured() && (
+        <button
+          onClick={async () => { await signOut(); }}
+          style={{ ...btnGhost, ...btnSmall, float: 'right', marginTop: -40, color: '#ff6b6b' }}
+        >
+          退出登录
+        </button>
+      )}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
         <button onClick={() => setShowWizard(!showWizard)} style={{ ...btn(C.success, '#001'), fontWeight: 700 }}>

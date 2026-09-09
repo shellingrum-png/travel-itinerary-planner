@@ -394,6 +394,29 @@ class TravelDb extends Dexie implements Db {
   async upsertTemplate(tpl: TripTemplate): Promise<void> {
     await this.tripTemplates.put(tpl);
   }
+
+  /** V10 多用户:登录/登出时清空本地用户数据(settings/templates 保留),供登录后从云端重拉 */
+  async clearAll(): Promise<void> {
+    await this.transaction(
+      'rw',
+      [this.itineraryItems, this.itineraryDays, this.transports, this.hotels, this.expenses,
+       this.poiAiCards, this.pois, this.routeCache, this.poiSearchCache, this.trips],
+      async () => {
+        await Promise.all([
+          this.itineraryItems.clear(),
+          this.itineraryDays.clear(),
+          this.transports.clear(),
+          this.hotels.clear(),
+          this.expenses.clear(),
+          this.poiAiCards.clear(),
+          this.pois.clear(),
+          this.routeCache.clear(),
+          this.poiSearchCache.clear(),
+          this.trips.clear(),
+        ]);
+      },
+    );
+  }
 }
 
 /** 行程天数生成:从 startDate 到 endDate,每天一 day */
