@@ -63,15 +63,16 @@ class TravelDb extends Dexie implements Db {
     return (await this.trips.get(id)) ?? null;
   }
 
-  async createTrip(input: Omit<Trip, 'id' | 'status'>): Promise<Trip> {
-    const id = crypto.randomUUID();
+  /** 新增旅程;id 缺省随机生成,恢复时传原 id 保持本地=云端一致 */
+  async createTrip(input: Omit<Trip, 'id' | 'status'>, id?: string): Promise<Trip> {
+    const tripId = id || crypto.randomUUID();
     const now = new Date().toISOString();
-    const trip: Trip = { ...input, id, status: 'planning', updatedAt: now };
+    const trip: Trip = { ...input, id: tripId, status: 'planning', updatedAt: now };
     const days = generateDays(trip.startDate, trip.endDate);
     await this.transaction('rw', this.trips, this.itineraryDays, async () => {
       await this.trips.add(trip);
       await this.itineraryDays.bulkAdd(
-        days.map((d) => ({ ...d, tripId: id })),
+        days.map((d) => ({ ...d, tripId })),
       );
     });
     return trip;

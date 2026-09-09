@@ -120,13 +120,13 @@ export async function restoreTrip(tripId: string): Promise<boolean> {
     // 清掉本地该旅程旧数据,再写回
     const exist = await db.getTrip(tripId);
     if (exist) await db.deleteTrip(tripId);
-    // 重建
+    // 重建(把原 id 作为第二参数传入,保持本地=云端 id,否则 createTrip 会生成新 uuid → 恢复成"新id空壳"且重复上传)
     await db.createTrip({
       title: snap.trip.title, destination: snap.trip.destination,
       startDate: snap.trip.startDate, endDate: snap.trip.endDate,
       companionCount: snap.trip.companionCount, currency: snap.trip.currency,
       totalBudget: snap.trip.totalBudget, cityNodes: snap.trip.cityNodes,
-    });
+    }, tripId);
     // 恢复状态与更新时刻(createTrip 默认 planning)
     await db.updateTrip(tripId, { status: snap.trip.status, updatedAt: snap.trip.updatedAt });
 

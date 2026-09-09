@@ -64,22 +64,32 @@ export default function TripList() {
   const importSeed = async () => {
     setImporting(true);
     try {
-      // 先删同名的旧旅程(避免重复;坐标污染后重导也能自动清理)
+      // 幂等导入:找到本地同名旅程复用其 id(避免每次导入生成新 id → 云端堆积同名多份)
       const s = seedData as any;
       const existing = await db.listTrips();
-      const dupes = existing.filter((t) => t.title === s.trip.title);
-      for (const d of dupes) await db.deleteTrip(d.id);
+      const sameTitle = existing.find((t) => t.title === s.trip.title);
+      const tripId = sameTitle ? sameTitle.id : crypto.randomUUID();
 
-      const trip = await db.createTrip({
-        title: s.trip.title,
-        destination: s.trip.destination,
-        startDate: s.trip.startDate,
-        endDate: s.trip.endDate,
-        companionCount: s.trip.companionCount,
-        currency: s.trip.currency,
-        totalBudget: s.trip.totalBudget,
-      });
-      const days = await db.listDays(trip.id);
+      // 清除旧同名旅程的全部天数+排点(保留 id 与天数骨架可统一重建)
+      const oldDays = await db.listDays(tripId);
+      for (const d of oldDays) {
+        const items = await db.listItems(d.id);
+        for (const it of items) await db.removeItem(it.id);
+      }
+
+      // 若没有同名旅程,才新建天数骨架;有则沿用现有天数
+      if (!sameTitle) {
+        await db.createTrip({
+          title: s.trip.title,
+          destination: s.trip.destination,
+          startDate: s.trip.startDate,
+          endDate: s.trip.endDate,
+          companionCount: s.trip.companionCount,
+          currency: s.trip.currency,
+          totalBudget: s.trip.totalBudget,
+        }, tripId);
+      }
+      const days = await db.listDays(tripId);
       for (const sd of s.days) {
         const day = days.find((d) => d.daySeq === sd.daySeq);
         if (!day) continue;

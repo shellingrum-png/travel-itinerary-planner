@@ -10,8 +10,8 @@ export interface Db {
   // trips
   listTrips(): Promise<Trip[]>;
   getTrip(id: string): Promise<Trip | null>;
-  createTrip(input: Omit<Trip, 'id' | 'status'>): Promise<Trip>;
-  // 自动生成 itinerary_days(day_seq=1..N)
+  createTrip(input: Omit<Trip, 'id' | 'status'>, id?: string): Promise<Trip>;
+  // 自动生成 itinerary_days(day_seq=1..N);id 缺省随机,恢复时可传原 id
   updateTrip(id: string, patch: Partial<Trip>): Promise<void>;
   deleteTrip(id: string): Promise<void>;
 
