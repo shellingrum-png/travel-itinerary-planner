@@ -4,7 +4,7 @@ import { db } from '../services/db';
 import type { Trip } from '../types';
 import seedData from '../seed.json';
 import CreateWizard from '../components/CreateWizard';
-import { listBackedUpTrips, restoreTrip, backupTrip } from '../services/sync';
+import { listBackedUpTrips, restoreTrip, reconcile } from '../services/sync';
 import { C, btn, btnGhost, btnSmall } from '../components/ui';
 
 export default function TripList() {
@@ -20,16 +20,15 @@ export default function TripList() {
 
   useEffect(() => {
     load();
-    // 打开时:把本地所有旅程备份到云端(防止换设备丢失)
-    backupAllLocal();
+    // 打开时:自动双向 reconcile(换设备拉取+本地推送),代替旧的单向备份
+    runReconcile();
   }, []);
 
-  // 本地旅程都备份到云端
-  const backupAllLocal = async () => {
-    try {
-      const local = await db.listTrips();
-      for (const t of local) await backupTrip(t.id);
-    } catch { /* 静默 */ }
+  // 自动同步:先 reconcile,再刷新列表
+  const runReconcile = async () => {
+    const { pushed, pulled } = await reconcile();
+    await load();
+    if (pushed || pulled) console.log('[云同步]', `推送 ${pushed} 个,拉取 ${pulled} 个`);
   };
 
   // 从云端恢复(换设备/浏览器时):拉取云端有但本地没有的旅程
@@ -38,7 +37,7 @@ export default function TripList() {
     try {
       const cloudIds = await listBackedUpTrips();
       const localIds = new Set((await db.listTrips()).map((t) => t.id));
-      const missing = cloudIds.filter((id) => !localIds.has(id));
+      const missing = cloudIds.map((c) => c.id).filter((id) => !localIds.has(id));
       if (missing.length === 0) {
         alert('云端没有需要恢复的旅程(都已在本地)。');
       } else {

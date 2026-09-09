@@ -5,6 +5,8 @@ import type { MarkerDef } from '../components/MapView';
 import { useStagedStore } from '../stores/stagedStore';
 
 const WEB_KEY = import.meta.env.VITE_AMAP_WEB_KEY || '9a5f6f729b7e6e7577d18d31a5d52e97';
+// 生产环境走后端代理(VITE_AMAP_PROXY=/api),隐藏 Web 服务 key;开发环境直连 restapi
+const AMAP_PROXY = import.meta.env.VITE_AMAP_PROXY || '';
 
 interface SearchResult {
   id: string;
@@ -31,9 +33,11 @@ export default function PoiSearch() {
     setError(null);
     try {
       const cacheKey = `${city}|${keyword}`;
-      const data = await fetch(
-        `https://restapi.amap.com/v3/place/text?key=${WEB_KEY}&keywords=${encodeURIComponent(keyword)}&city=${encodeURIComponent(city)}&offset=20`,
-      ).then((r) => r.json());
+      // 优先走后端代理(隐藏 key);失败回退直连 restapi
+      const url = AMAP_PROXY
+        ? `${AMAP_PROXY}/api/amap/place?keywords=${encodeURIComponent(keyword)}&city=${encodeURIComponent(city)}`
+        : `https://restapi.amap.com/v3/place/text?key=${WEB_KEY}&keywords=${encodeURIComponent(keyword)}&city=${encodeURIComponent(city)}&offset=20`;
+      const data = await fetch(url).then((r) => r.json());
 
       if (data.status !== '1') {
         setError(data.info || '检索失败');

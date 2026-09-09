@@ -19,12 +19,18 @@ export interface TripSnapshot {
   savedAt: string;
 }
 
+/** 云端已快照的旅程条目 */
+export interface CloudTripRef {
+  id: string;
+  updatedAt: string | null;
+}
+
 /** 快照接口(可插拔:自建后端 / Supabase / 文件) */
 export interface SnapshotStorage {
   save(tripId: string, snap: TripSnapshot): Promise<void>;
   load(tripId: string): Promise<TripSnapshot | null>;
   remove(tripId: string): Promise<void>;
-  list(): Promise<string[]>; // 已快照的 tripId 列表
+  list(): Promise<CloudTripRef[]>; // 已快照的旅程列表(含云端时间戳)
 }
 
 // ── 存储后端:自建 server(默认) ──
@@ -46,7 +52,7 @@ class BackendSnapshotStorage implements SnapshotStorage {
   async remove(tripId: string): Promise<void> {
     await fetch(`${BACKEND_BASE}/api/snapshot/${tripId}`, { method: 'DELETE' });
   }
-  async list(): Promise<string[]> {
+  async list(): Promise<CloudTripRef[]> {
     const res = await fetch(`${BACKEND_BASE}/api/snapshot`);
     return res.json();
   }
@@ -114,16 +120,26 @@ export async function restoreTrip(tripId: string): Promise<boolean> {
       companionCount: snap.trip.companionCount, currency: snap.trip.currency,
       totalBudget: snap.trip.totalBudget, cityNodes: snap.trip.cityNodes,
     });
+    // 恢复状态与更新时刻(createTrip 默认 planning)
+    await db.updateTrip(tripId, { status: snap.trip.status, updatedAt: snap.trip.updatedAt });
+
     // 写回 days(注意 createTrip 已生成同样多的天,需按 daySeq 对齐)
     const newDays = await db.listDays(tripId);
+    // 天数不一致时补齐(createTrip 可能生成的天数比快照少)
     for (const day of snap.days) {
-      const target = newDays.find((d) => d.daySeq === day.daySeq);
+      if (!newDays.some((d) => d.daySeq === day.daySeq)) {
+        await db.addDay(tripId, newDays.length ? day.date : snap.trip.startDate);
+      }
+    }
+    const alignedDays = await db.listDays(tripId);
+    for (const day of snap.days) {
+      const target = alignedDays.find((d) => d.daySeq === day.daySeq);
       if (target) await db.updateDay(target.id, { note: day.note, startTime: day.startTime, endTime: day.endTime });
     }
     // 写回 POI / items / hotels / transports / expenses
     for (const poi of snap.pois) await db.upsertPoi(poi);
     for (const item of snap.items) {
-      const day = newDays.find((d) => d.daySeq === snap.days.find((x) => x.id === item.dayId)?.daySeq);
+      const day = alignedDays.find((d) => d.daySeq === snap.days.find((x) => x.id === item.dayId)?.daySeq);
       if (day) await db.addItem({ dayId: day.id, poiId: item.poiId, itemType: item.itemType, transportMode: item.transportMode, note: item.note, visitMinutes: item.visitMinutes });
     }
     for (const h of snap.hotels) await db.addHotel({ tripId, name: h.name, address: h.address, lng: h.lng, lat: h.lat, checkIn: h.checkIn, checkOut: h.checkOut, checkInTime: h.checkInTime, checkOutTime: h.checkOutTime, poiId: h.poiId });
@@ -139,8 +155,61 @@ export async function restoreTrip(tripId: string): Promise<boolean> {
 }
 
 /** 列出所有已备份的旅程 */
-export async function listBackedUpTrips(): Promise<string[]> {
+export async function listBackedUpTrips(): Promise<CloudTripRef[]> {
   try { return await STORAGE.list(); } catch { return []; }
+}
+
+/**
+ * V9.0:自动双向 reconcile(打开应用时调用)。
+ * 规则(last-write-wins per trip,快照级):
+ *  - 云端有、本地无 → 拉取恢复(换设备场景)
+ *  - 本地有、云端无 → 推送备份(首次/新旅程)
+ *  - 都有 → 比 updatedAt,新的覆盖旧的
+ * 返回 { pushed, pulled } 用于 UI 提示。
+ */
+export async function reconcile(): Promise<{ pushed: number; pulled: number }> {
+  let pushed = 0;
+  let pulled = 0;
+  try {
+    const local = await db.listTrips();
+    const localById = new Map(local.map((t) => [t.id, t]));
+    const cloud = await STORAGE.list();
+    const cloudById = new Map(cloud.map((c) => [c.id, c]));
+
+    const localIds = new Set(localById.keys());
+    const cloudIds = new Set(cloudById.keys());
+
+    // 推送本地有、云端没有的
+    for (const id of localIds) {
+      if (!cloudIds.has(id)) {
+        const ok = await backupTrip(id);
+        if (ok) pushed++;
+      }
+    }
+
+    // 处理云端有、本地没有 或 云端更新的
+    for (const ref of cloud) {
+      const localTrip = localById.get(ref.id);
+      if (!localTrip) {
+        const ok = await restoreTrip(ref.id);
+        if (ok) pulled++;
+        continue;
+      }
+      const localTs = localTrip.updatedAt ? new Date(localTrip.updatedAt).getTime() : 0;
+      const cloudTs = ref.updatedAt ? new Date(ref.updatedAt).getTime() : 0;
+      if (cloudTs > localTs) {
+        const ok = await restoreTrip(ref.id);
+        if (ok) pulled++;
+      } else if (localTs > cloudTs) {
+        const ok = await backupTrip(ref.id);
+        if (ok) pushed++;
+      }
+      // 相等或本地无 updatedAt 且云端也无 → 视为一致,跳过
+    }
+  } catch (e) {
+    console.warn('[sync] reconcile 失败:', e);
+  }
+  return { pushed, pulled };
 }
 
 /** 删除某旅程的后端快照 */

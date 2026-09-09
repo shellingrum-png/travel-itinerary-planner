@@ -45,6 +45,8 @@ export interface Db {
 
   // route cache
   getRouteCache(key: string): Promise<RouteCache | null>;
+  /** V9.0:读取全部路径缓存(数据概览按 key 聚合开车公里) */
+  listRouteCache(): Promise<RouteCache[]>;
   upsertRouteCache(entry: {
     key: string;
     origin: [number, number];

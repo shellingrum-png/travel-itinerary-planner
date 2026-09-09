@@ -38,6 +38,12 @@ const SUPABASE_KEY = ENV.SUPABASE_KEY;
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.warn('⚠️ 未配置 SUPABASE_URL/SUPABASE_KEY,快照功能将不可用(见 server/.env)');
 }
+// LLM 代理配置(key 收在服务端,不下发到前端)
+const LLM_BASE_URL = ENV.LLM_BASE_URL || 'https://api.deepseek.com/v1';
+const LLM_API_KEY = ENV.LLM_API_KEY || '';
+const LLM_MODEL = ENV.LLM_MODEL || 'deepseek-chat';
+// 高德 Web 服务 key(代理 /api/amap/place,消除前端 URL 明文 key)
+const AMAP_WEB_KEY = ENV.AMAP_WEB_KEY || '';
 
 // 调 Supabase REST
 async function supabaseFetch(path, opts = {}) {
@@ -55,6 +61,7 @@ async function supabaseFetch(path, opts = {}) {
 
 // 快照存 Supabase:upsert 到 trips 表(snapshot jsonb 列)
 async function snapSave(tripId, snap) {
+  console.log(`[snapSave] 收到 ${tripId} 的备份请求(标题: ${snap.trip?.title || ''})`);
   try {
     await supabaseFetch('/trips', {
       method: 'POST',
@@ -81,10 +88,10 @@ async function snapLoad(tripId) {
 
 async function snapList() {
   try {
-    const res = await supabaseFetch('/trips?select=id');
+    const res = await supabaseFetch('/trips?select=id,updated_at');
     if (!res.ok) return [];
     const rows = await res.json();
-    return rows.map((r) => r.id);
+    return rows.map((r) => ({ id: r.id, updatedAt: r.updated_at || null }));
   } catch { return []; }
 }
 
@@ -146,6 +153,13 @@ function readBody(req) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+  // 全局请求日志:记录来源与路径,便于确认浏览器是否连到后端
+  if (req.method !== 'OPTIONS') {
+    console.log(`[req] ${req.method} ${url.pathname} origin=${req.headers.origin || '-'}`);
+  }
+
+  // ── CORS 预检:必须在所有路由判断之前处理,否则被各路由当业务请求返回 4xx,浏览器视为预检失败 ──
+  if (req.method === 'OPTIONS') { setCors(res); return res.writeHead(204).end(); }
 
   // 健康检查
   if (url.pathname === '/api/health') return sendJson(res, 200, { ok: true, server: 'transport+sync', port: PORT });
@@ -160,6 +174,48 @@ const server = http.createServer(async (req, res) => {
     const err = validate({ mode, from, to, date });
     if (err) return sendJson(res, 400, { ok: false, error: err });
     return sendJson(res, 200, queryTransport(mode, from, to, date));
+  }
+
+  // LLM 代理:POST /api/llm/chat/completions (key 在服务端,前端零泄露)
+  if (url.pathname === '/api/llm/chat/completions' && req.method === 'POST') {
+    if (!LLM_API_KEY) return sendJson(res, 500, { ok: false, error: '未配置 LLM_API_KEY' });
+    const body = await readBody(req);
+    // 白名单透传;模型由服务端决定(前端不覆盖),key 由服务端注入
+    const payload = {
+      model: LLM_MODEL,
+      messages: body.messages,
+      temperature: typeof body.temperature === 'number' ? body.temperature : 0.3,
+      ...(body.response_format ? { response_format: body.response_format } : {}),
+    };
+    try {
+      const up = await fetch(`${LLM_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${LLM_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!up.ok) {
+        const txt = await up.text();
+        return sendJson(res, up.status, { ok: false, error: `上游 LLM ${up.status}`, detail: txt.slice(0, 300) });
+      }
+      const data = await up.json();
+      return sendJson(res, 200, data);
+    } catch (e) { return sendJson(res, 500, { ok: false, error: `LLM 代理失败: ${e.message}` }); }
+  }
+
+  // 高德代理:GET /api/amap/place (Web 服务 key 在服务端)
+  if (url.pathname === '/api/amap/place' && req.method === 'GET') {
+    const keywords = url.searchParams.get('keywords') || '';
+    const city = url.searchParams.get('city') || '';
+    const keyVal = AMAP_WEB_KEY || url.searchParams.get('key') || '';
+    try {
+      const api = 'https://restapi.amap.com/v3/place/text'
+        + `?key=${encodeURIComponent(keyVal)}`
+        + `&keywords=${encodeURIComponent(keywords)}`
+        + `&city=${encodeURIComponent(city)}&offset=20`;
+      const up = await fetch(api);
+      const data = await up.json();
+      return sendJson(res, 200, data);
+    } catch (e) { return sendJson(res, 500, { ok: false, error: `AMAP 代理失败: ${e.message}` }); }
   }
 
   // 快照:列表 /:tripId (存 Supabase)
@@ -194,7 +250,7 @@ const server = http.createServer(async (req, res) => {
   // 预检
   if (req.method === 'OPTIONS') { setCors(res); return res.writeHead(204).end(); }
 
-  sendJson(res, 404, { ok: false, error: `未找到路由 ${url.pathname}。可用: /api/transport, /api/health, /api/snapshot` });
+  sendJson(res, 404, { ok: false, error: `未找到路由 ${url.pathname}。可用: /api/transport, /api/health, /api/snapshot, /api/llm/chat/completions, /api/amap/place` });
 });
 
 server.listen(PORT, () => {

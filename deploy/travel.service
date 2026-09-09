@@ -1,0 +1,19 @@
+# travel 后端 systemd 单元 —— 托管 Node 服务(交通查询 + 快照 + LLM/高德代理)
+# 用法: sudo cp deploy/travel.service /etc/systemd/system/travel.service
+#       sudo systemctl daemon-reload && sudo systemctl enable --now travel
+
+[Unit]
+Description=Travel Itinerary Planner backend (transport + snapshot + LLM proxy)
+After=network.target
+
+[Service]
+# 改成实际项目路径;WorkingDirectory 决定 server/.env 加载与 snapshots 目录
+WorkingDirectory=/home/youruser/travel/server
+ExecStart=/usr/bin/node /home/youruser/travel/server/index.js
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+# 若 Node 不在 PATH,改用 /usr/bin/node(which node 查看)。PM2 亦可替代本方案。
+
+[Install]
+WantedBy=multi-user.target

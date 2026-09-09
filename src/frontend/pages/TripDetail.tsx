@@ -1291,6 +1291,7 @@ export default function TripDetail() {
             <span>已花 ¥{spent.toFixed(0)}</span>
             <span style={{ color: spent > trip.totalBudget ? '#c00' : '#2e7d32' }}>剩余 ¥{Math.max(0, trip.totalBudget - spent).toFixed(0)}</span>
             <Link to={`/trip/${trip.id}/bookkeeping`} style={{ color: '#1677ff', marginLeft: 'auto' }}>记账</Link>
+            <Link to={`/trip/${trip.id}/overview`} style={{ color: '#06d6a0' }}>📊 概览</Link>
           </div>
         )}
 

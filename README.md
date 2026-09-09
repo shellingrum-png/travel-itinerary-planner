@@ -27,6 +27,16 @@ cp .env.example .env   # 填入高德 Key / LLM Key(见 docs/API.md)
 npm run dev
 ```
 
+## 公网部署(腾讯云)
+
+前端是纯静态产物,配套一个 Node 后端(交通班次查询 + 快照 + LLM/高德代理)。完整步骤见 [`deploy/SERVER_SETUP.md`](deploy/SERVER_SETUP.md) —— 涵盖 Supabase 云同步建表、Nginx 反代、HTTPS、高德域名白名单。部署一次命令:
+
+```bash
+./deploy/deploy.sh
+```
+
+> 公网版环境变量在 `.env.production`(含 `/api` 同源代理,无密钥),`server/.env` 存放密钥(高德 Web key、LLM key、Supabase service_role key)。数据经快照级云同步(`sync.ts` 的 `reconcile`)在手机/多设备间互通。
+
 ## 文档导航
 
 | 文档 | 说明 |

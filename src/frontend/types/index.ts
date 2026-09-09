@@ -14,6 +14,7 @@ export interface Trip {
   companionCount: number;
   currency: string;
   cityNodes?: CityNode[]; // V6.0: 多城市节点分配
+  updatedAt?: string;     // V9.0: 最近修改时间,用于云同步冲突合并(last-write-wins)
 }
 
 export interface CityNode {

@@ -65,7 +65,8 @@ class TravelDb extends Dexie implements Db {
 
   async createTrip(input: Omit<Trip, 'id' | 'status'>): Promise<Trip> {
     const id = crypto.randomUUID();
-    const trip: Trip = { ...input, id, status: 'planning' };
+    const now = new Date().toISOString();
+    const trip: Trip = { ...input, id, status: 'planning', updatedAt: now };
     const days = generateDays(trip.startDate, trip.endDate);
     await this.transaction('rw', this.trips, this.itineraryDays, async () => {
       await this.trips.add(trip);
@@ -77,7 +78,7 @@ class TravelDb extends Dexie implements Db {
   }
 
   async updateTrip(id: string, patch: Partial<Trip>): Promise<void> {
-    await this.trips.update(id, patch);
+    await this.trips.update(id, { ...patch, updatedAt: new Date().toISOString() });
   }
 
   async deleteTrip(id: string): Promise<void> {
@@ -284,6 +285,10 @@ class TravelDb extends Dexie implements Db {
       return null;
     }
     return entry;
+  }
+
+  async listRouteCache(): Promise<RouteCache[]> {
+    return this.routeCache.toArray();
   }
 
   async upsertRouteCache(entry: {

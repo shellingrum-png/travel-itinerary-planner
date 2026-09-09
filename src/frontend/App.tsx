@@ -9,6 +9,7 @@ import StagedPage from './pages/StagedPage';
 import TransportPage from './pages/TransportPage';
 import HotelsPage from './pages/HotelsPage';
 import OptimizePage from './pages/OptimizePage';
+import TripOverviewPage from './pages/TripOverviewPage';
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
       <Route path="/trip/:id/transport" element={<TransportPage />} />
       <Route path="/trip/:id/hotels" element={<HotelsPage />} />
       <Route path="/trip/:id/bookkeeping" element={<Bookkeeping />} />
+      <Route path="/trip/:id/overview" element={<TripOverviewPage />} />
     </Routes>
   );
 }

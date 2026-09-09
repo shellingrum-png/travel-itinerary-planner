@@ -143,6 +143,19 @@ async function getPoiCard(poi, city):
 | `optimizeAPI.reorder(dayId)` | 一键 TSP 重排 |
 | `expensesAPI.sum(tripId)` | 已花合计 → 预算条 |
 
+### 5b. 后端服务接口(`server/index.js`,端口 8766,V9.0 扩展)
+
+| 接口 | 说明 |
+| :--- | :--- |
+| `GET /api/health` | 健康检查 |
+| `GET /api/transport?mode=&from=&to=&date=` | 高铁/航班班次查询(python) |
+| `PUT/GET/DELETE /api/snapshot/:tripId` | 旅程快照备份/恢复(存 Supabase `trips.snapshot`) |
+| `GET /api/snapshot` | 快照列表 `[{id, updatedAt}]`(供前端 conflict 合并) |
+| `POST /api/llm/chat/completions` | **LLM 代理**(key 在服务端,前端零泄露) |
+| `GET /api/amap/place?keywords=&city=` | **高德 Web 服务代理**(key 在服务端) |
+
+> 公网部署时前端 `.env.production` 把这些指向同源 `/api`(`VITE_LLM_BASE_URL=/api/llm`、`VITE_AMAP_PROXY=/api`),Nginx 反代到 8766。本地开发直接走原上游。
+
 ---
 
 ## 6. 错误码约定

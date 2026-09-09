@@ -13,6 +13,8 @@ import type { PoiAiCard, PoiCategory } from '../types';
 const BASE_URL = import.meta.env.VITE_LLM_BASE_URL || 'https://api.deepseek.com/v1';
 const API_KEY = import.meta.env.VITE_LLM_API_KEY || '';
 const MODEL = import.meta.env.VITE_LLM_MODEL || 'deepseek-chat';
+// 是否走后端代理(VITE_LLM_BASE_URL=/api/llm 时,key 由服务端注入,前端无 key)
+const IS_PROXY = import.meta.env.VITE_LLM_PROXY === '1' || BASE_URL.startsWith('/');
 
 // 纯 JS md5 实现, 用于幂等缓存键
 function md5(input: string): string {
@@ -75,11 +77,13 @@ export async function getPoiCard(
   if (cached) return cached;
 
   // ── 第 3 层: LLM 生成 ──
-  if (API_KEY && API_KEY !== 'your_llm_api_key') {
+  if (IS_PROXY || (API_KEY && API_KEY !== 'your_llm_api_key')) {
     try {
       const res = await fetch(`${BASE_URL}/chat/completions`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
+        headers: IS_PROXY
+          ? { 'Content-Type': 'application/json' }
+          : { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: MODEL,
           temperature: 0.3,
