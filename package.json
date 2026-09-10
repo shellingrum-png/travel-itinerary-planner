@@ -1,6 +1,6 @@
 {
   "name": "travel-itinerary-planner",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "个人旅行行程规划助手 —— 地图可视化 + 时间轴 + 智能路径 + 记账",
