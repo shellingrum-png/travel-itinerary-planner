@@ -1504,7 +1504,7 @@ export default function TripDetail() {
                           const first = segs?.[0];
                           if (!first || first.fromId !== AIRPORT_ARR_ID) return null;
                           return (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#ffa07a', padding: '3px 4px 3px 22px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#8fa8c0', padding: '3px 4px 3px 22px' }}>
                               <span>✈️</span>
                               <span>{airports.arr?.name} →</span>
                               <span>{MODE_META[first.mode].icon} {fmtSegment(first)}</span>
@@ -1574,7 +1574,7 @@ export default function TripDetail() {
                           const lastSeg = segs?.[segs.length - 1];
                           if (!lastSeg || lastSeg.toId !== AIRPORT_DEP_ID) return null;
                           return (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#ffa07a', padding: '3px 4px 3px 22px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#8fa8c0', padding: '3px 4px 3px 22px' }}>
                               <span>✈️</span>
                               <span>→ {airports.dep?.name}</span>
                               <span>{MODE_META[lastSeg.mode].icon} {fmtSegment(lastSeg)}</span>
