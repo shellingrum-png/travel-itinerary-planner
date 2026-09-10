@@ -176,9 +176,10 @@ export async function listBackedUpTrips(): Promise<CloudTripRef[]> {
  *  - 都有 → 比 updatedAt,新的覆盖旧的
  * 返回 { pushed, pulled } 用于 UI 提示。
  */
-export async function reconcile(): Promise<{ pushed: number; pulled: number }> {
+export async function reconcile(): Promise<{ pushed: number; pulled: number; failed: number }> {
   let pushed = 0;
   let pulled = 0;
+  let failed = 0;
   try {
     const local = await db.listTrips();
     const localById = new Map(local.map((t) => [t.id, t]));
@@ -192,7 +193,7 @@ export async function reconcile(): Promise<{ pushed: number; pulled: number }> {
     for (const id of localIds) {
       if (!cloudIds.has(id)) {
         const ok = await backupTrip(id);
-        if (ok) pushed++;
+        if (ok) pushed++; else failed++;
       }
     }
 
@@ -201,24 +202,25 @@ export async function reconcile(): Promise<{ pushed: number; pulled: number }> {
       const localTrip = localById.get(ref.id);
       if (!localTrip) {
         const ok = await restoreTrip(ref.id);
-        if (ok) pulled++;
+        if (ok) pulled++; else failed++;
         continue;
       }
       const localTs = localTrip.updatedAt ? new Date(localTrip.updatedAt).getTime() : 0;
       const cloudTs = ref.updatedAt ? new Date(ref.updatedAt).getTime() : 0;
       if (cloudTs > localTs) {
         const ok = await restoreTrip(ref.id);
-        if (ok) pulled++;
+        if (ok) pulled++; else failed++;
       } else if (localTs > cloudTs) {
         const ok = await backupTrip(ref.id);
-        if (ok) pushed++;
+        if (ok) pushed++; else failed++;
       }
       // 相等或本地无 updatedAt 且云端也无 → 视为一致,跳过
     }
   } catch (e) {
     console.warn('[sync] reconcile 失败:', e);
+    failed++;
   }
-  return { pushed, pulled };
+  return { pushed, pulled, failed };
 }
 
 /** 删除某旅程的后端快照 */

@@ -19,7 +19,7 @@ import type {
 import type { Db } from './db';
 import { uuid } from '../utils/uuid';
 
-class TravelDb extends Dexie implements Db {
+export class TravelDb extends Dexie implements Db {
   trips!: Table<Trip, string>;
   itineraryDays!: Table<ItineraryDay, string>;
   pois!: Table<Poi, string>;
@@ -33,8 +33,8 @@ class TravelDb extends Dexie implements Db {
   settings!: Table<{ key: string; value: string }, string>;
   tripTemplates!: Table<TripTemplate, string>;
 
-  constructor() {
-    super('travel_planner');
+  constructor(name = 'travel_planner') {
+    super(name);
     this.version(1).stores({
       trips: 'id, status',
       itineraryDays: 'id, tripId, daySeq',
@@ -440,4 +440,119 @@ function generateDays(
   return days;
 }
 
-export const travelDb = new TravelDb();
+/**
+ * 数据库名:按账号隔离,每个用户一个独立 IndexedDB 库。
+ * 这样切换账号时各账号数据互不干扰 —— 不再需要"登录时清空本地库",
+ * 也就彻底消除了「清空本地 → 未同步数据永久丢失」的窗口。
+ *
+ * 'travel_planner' 是旧版单库名,仅用于下列迁移函数识别历史数据。
+ */
+export const LEGACY_DB_NAME = 'travel_planner';
+const DB_PREFIX = 'travel_planner';
+
+function dbNameForUser(userId: string | null | undefined): string {
+  return userId ? `${DB_PREFIX}__${userId}` : `${DB_PREFIX}__anon`;
+}
+
+let activeDb = new TravelDb(dbNameForUser(null));
+
+/** 当前活动库(测试用) */
+export function getActiveDb(): TravelDb {
+  return activeDb;
+}
+
+/** 已打开过的库,切回时复用避免重复 open */
+const openedDbs = new Map<string, TravelDb>();
+
+/**
+ * 切换当前活动数据库(登录/登出时调用)。
+ * 打开失败时退回独立库,保证不误用其他账号的数据。
+ */
+export async function setActiveDb(userId: string | null | undefined): Promise<void> {
+  const name = dbNameForUser(userId);
+  if (activeDb.name === name) return;
+
+  let next = openedDbs.get(name);
+  try {
+    if (!next) {
+      next = new TravelDb(name);
+      openedDbs.set(name, next);
+    }
+    // 复用时可能已被切换流程关闭,需重新打开
+    if (!next.isOpen()) await next.open();
+  } catch (e) {
+    console.warn(`[db] 打开 ${name} 失败,退回独立库`, e);
+    next = new TravelDb(dbNameForUser(null));
+  }
+
+  // 关掉旧库(不再需要它持有连接;数据仍在 IndexedDB 中,切回时会重新打开)
+  try { activeDb.close(); } catch { /* ignore */ }
+
+  activeDb = next;
+}
+
+/** 把旧的单库数据(若存在)整个迁移到目标账号库,确保老用户数据不丢 */
+export async function migrateLegacyDb(targetUserId: string): Promise<boolean> {
+  if (!(await Dexie.exists(LEGACY_DB_NAME))) return false;
+
+  const TABLES = [
+    'trips', 'itineraryDays', 'pois', 'poiAiCards', 'itineraryItems',
+    'transports', 'hotels', 'expenses', 'routeCache', 'poiSearchCache',
+    'settings', 'tripTemplates',
+  ] as const;
+
+  // 1. 先把旧库全部读入内存 —— IndexedDB 事务不能跨数据库,
+  //    必须在目标库事务【之外】完成旧库读取,否则事务会失效。
+  const dump: Record<string, any[]> = {};
+  const legacy = new TravelDb(LEGACY_DB_NAME);
+  try {
+    await legacy.open();
+    for (const t of TABLES) {
+      dump[t] = await (legacy as any)[t].toArray();
+    }
+  } catch (e) {
+    console.warn('[db] 读取旧库失败', e);
+    try { legacy.close(); } catch { /* ignore */ }
+    return false;
+  } finally {
+    try { legacy.close(); } catch { /* ignore */ }
+  }
+
+  if (!dump.trips?.length) return false;
+
+  // 2. 写入账号库(目标库已有数据则不动,避免覆盖新数据)
+  const target = new TravelDb(dbNameForUser(targetUserId));
+  try {
+    await target.open();
+    if ((await target.listTrips()).length > 0) { target.close(); return false; }
+
+    await target.transaction('rw', TABLES.map((t) => (target as any)[t]), async () => {
+      for (const t of TABLES) {
+        if (dump[t]?.length) await (target as any)[t].bulkAdd(dump[t]);
+      }
+    });
+    console.log(`[db] 已把历史数据(${dump.trips.length} 个旅程)迁移到账号库`);
+    return true;
+  } catch (e) {
+    console.warn('[db] 历史数据迁移失败', e);
+    return false;
+  } finally {
+    try { target.close(); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * 门面:所有调用方拿到的是当前活动库的即时代理。
+ * 这样切换账号后,原模块级 `import { db }` 引用依然指向新库,无需改动 13 个调用点。
+ */
+export const travelDb = new Proxy({} as TravelDb, {
+  get(_t, prop, receiver) {
+    const value = Reflect.get(activeDb as object, prop, receiver);
+    return typeof value === 'function' ? value.bind(activeDb) : value;
+  },
+  set(_t, prop, value) {
+    return Reflect.set(activeDb as object, prop, value);
+  },
+  has(_t, prop) { return prop in activeDb; },
+});
+
