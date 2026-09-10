@@ -24,6 +24,10 @@ const DAY_COLORS = [
   '#073b4c','#f77f00','#8338ec','#3a86ff','#ff006e',
 ];
 
+/** 机场在分段计算里的虚拟节点 id(机场来自大交通记录，不是普通 ItineraryItem) */
+const AIRPORT_ARR_ID = '__airport_arrival__';
+const AIRPORT_DEP_ID = '__airport_departure__';
+
 interface SearchResult {
   id: string; name: string; address: string; lng: number; lat: number; type: string;
 }
@@ -83,7 +87,6 @@ export default function TripDetail() {
   // V11 相邻节点路段(距离/时长):天内相邻段 + 跨天衔接段
   const [intraSegs, setIntraSegs] = useState<Map<string, (SegmentInfo | null)[]>>(new Map());
   const [crossSegs, setCrossSegs] = useState<Map<string, SegmentInfo | null>>(new Map());
-
   // V6.2 拖拽排序:当前拖拽的 item / 悬停目标(来源天id|itemId → 目标天id)
   const [dragItem, setDragItem] = useState<{ itemId: string; fromDayId: string } | null>(null);
   const [dragOverDayId, setDragOverDayId] = useState<string | null>(null);
@@ -180,9 +183,8 @@ export default function TripDetail() {
     let cancelled = false;
     (async () => {
       // 只取有坐标的点(否则无法算距离);transportMode 表示「到达该点的方式」
-      const days = daySummaries.map((s) => ({
-        dayId: s.day.id,
-        points: s.items
+      const days = daySummaries.map((s, di) => {
+        const points = s.items
           .filter((it) => it.poi && it.poi.lng !== 0 && it.poi.lat !== 0)
           .map((it) => ({
             id: it.id,
@@ -191,15 +193,36 @@ export default function TripDetail() {
             lat: it.poi!.lat,
             transportMode: it.transportMode,
             transportModeSet: it.transportModeSet,
-          } as SegPoint)),
-      }));
+          } as SegPoint));
+
+        // 机场作为「起/终点」并入计算(机场来自大交通记录,不是普通节点):
+        //  - 首日:到达机场作为行程起点,段为 机场→首站
+        //  - 末日:返程机场作为行程终点,段为 末站→机场(机场接送一律按驾车,不做距离改判)
+        const isFirst = di === 0;
+        const isLast = di === daySummaries.length - 1;
+        if (isFirst && airports.arr) {
+          points.unshift({
+            id: AIRPORT_ARR_ID, name: airports.arr.name,
+            lng: airports.arr.lng, lat: airports.arr.lat,
+            transportMode: 'drive', transportModeSet: true,
+          });
+        }
+        if (isLast && airports.dep) {
+          points.push({
+            id: AIRPORT_DEP_ID, name: airports.dep.name,
+            lng: airports.dep.lng, lat: airports.dep.lat,
+            transportMode: 'drive', transportModeSet: true,
+          });
+        }
+        return { dayId: s.day.id, points };
+      });
       const { intraDay, crossDay } = await computeAllSegments(days, getDuration, 5);
       if (cancelled) return;
       setIntraSegs(intraDay);
       setCrossSegs(crossDay);
     })().catch(() => { /* 计算失败不影响主流程,只是不显示路段 */ });
     return () => { cancelled = true; };
-  }, [daySummaries]);
+  }, [daySummaries, airports]);
 
   // ── 初始化地图 ──
   useEffect(() => {
@@ -1475,6 +1498,19 @@ export default function TripDetail() {
                       <div style={{ fontSize: 12, color: '#888' }}>暂无排点</div>
                     ) : (
                       <div style={{ margin: 0 }}>
+                        {/* 首日:到达机场 → 首站(机场来自大交通记录,单独渲染) */}
+                        {(() => {
+                          const segs = intraSegs.get(d.id);
+                          const first = segs?.[0];
+                          if (!first || first.fromId !== AIRPORT_ARR_ID) return null;
+                          return (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#ffa07a', padding: '3px 4px 3px 22px' }}>
+                              <span>✈️</span>
+                              <span>{airports.arr?.name} →</span>
+                              <span>{MODE_META[first.mode].icon} {fmtSegment(first)}</span>
+                            </div>
+                          );
+                        })()}
                         {ds!.items.map((it, idx) => {
                           const arr = arrivalSegmentFor(ds!.day.id, it);
                           return (
@@ -1532,6 +1568,19 @@ export default function TripDetail() {
                           </div>
                           );
                         })}
+                        {/* 末日:末站 → 返程机场(机场来自大交通记录,单独渲染) */}
+                        {(() => {
+                          const segs = intraSegs.get(d.id);
+                          const lastSeg = segs?.[segs.length - 1];
+                          if (!lastSeg || lastSeg.toId !== AIRPORT_DEP_ID) return null;
+                          return (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#ffa07a', padding: '3px 4px 3px 22px' }}>
+                              <span>✈️</span>
+                              <span>→ {airports.dep?.name}</span>
+                              <span>{MODE_META[lastSeg.mode].icon} {fmtSegment(lastSeg)}</span>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                     {/* 大交通行(恒渲染,不随景点清空隐藏) */}
