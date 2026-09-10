@@ -1,11 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   resolveMode, computeSegment, computeAllSegments, fmtSegment, fmtDistance, fmtDuration,
+  isExplicitTransportMode,
   WALK_THRESHOLD_KM, WALK_MAX_KM, DRIVE_MAX_KM, type SegPoint,
 } from '../segments';
 
-const pt = (id: string, lng: number, lat: number, mode: SegPoint['transportMode'] = 'drive'): SegPoint =>
-  ({ id, name: id, lng, lat, transportMode: mode });
+const pt = (id: string, lng: number, lat: number, mode: SegPoint['transportMode'] = 'drive', explicit = false): SegPoint =>
+  ({ id, name: id, lng, lat, transportMode: mode, transportModeSet: explicit });
 
 describe('resolveMode — 交通方式判定', () => {
   it('很近距离的 drive 降级为步行（同城短途开车不合理）', () => {
@@ -36,6 +37,21 @@ describe('resolveMode — 交通方式判定', () => {
   });
   it('跨城大交通(flight)一律尊重，即便距离近', () => {
     expect(resolveMode('flight', 1)).toBe('flight');
+  });
+
+  // 用户显式设置过 → 完全尊重，不做距离改判（本次线上问题的根因）
+  it('用户选了 389km 的驾车 → 保持驾车，不改判为火车', () => {
+    expect(resolveMode('drive', 389.9, true)).toBe('drive');
+  });
+  it('用户显式设置的 walk 即便很远也保持', () => {
+    expect(resolveMode('walk', 100, true)).toBe('walk');
+  });
+  it('用户显式选的近距离开车也保持（不再降级为步行）', () => {
+    expect(resolveMode('drive', 1, true)).toBe('drive');
+  });
+  it('未显式设置时仍走距离启发式', () => {
+    expect(resolveMode('drive', 389.9, false)).toBe('train');
+    expect(resolveMode('walk', 100, false)).toBe('drive');
   });
 });
 
@@ -116,6 +132,21 @@ describe('computeAllSegments — 天内 + 跨天', () => {
     const { crossDay } = await computeAllSegments(days, drive);
     expect(crossDay.get('d2')).toBeNull();
     expect(crossDay.get('d3')).toBeNull();   // 前一天(d2)无点 → 不生成
+  });
+});
+
+describe('isExplicitTransportMode — 旧数据兼容', () => {
+  it('有显式标记时以标记为准', () => {
+    expect(isExplicitTransportMode('walk', true)).toBe(true);
+    expect(isExplicitTransportMode('drive', false)).toBe(false);
+  });
+  it('无标记时:非 walk 视为用户设置过(旧数据里用户改过的值)', () => {
+    expect(isExplicitTransportMode('drive', undefined)).toBe(true);
+    expect(isExplicitTransportMode('train', undefined)).toBe(true);
+    expect(isExplicitTransportMode('flight', undefined)).toBe(true);
+  });
+  it('无标记时:walk 视为默认值(未指定)', () => {
+    expect(isExplicitTransportMode('walk', undefined)).toBe(false);
   });
 });
 

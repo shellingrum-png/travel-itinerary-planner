@@ -31,6 +31,12 @@ export interface SegPoint {
   lat: number;
   /** 到达该点的方式(来自 item.transportMode) */
   transportMode: TransportMode;
+  /**
+   * 该方式是否为用户明确设置。
+   * false/缺省 → 视为"未指定",按距离做合理性修正;
+   * true → 完全尊重,不做任何改判(用户就是想 389km 也开车)。
+   */
+  transportModeSet?: boolean;
 }
 
 /** 一段路的展示数据 */
@@ -66,13 +72,18 @@ export const DRIVE_MAX_KM = 300;    // 自驾超过 → 火车
 export const TRANSIT_MAX_KM = 50;   // 公交超过 → 火车
 
 /**
- * 决定一段路用什么交通方式:
- * - walk 太远 → 视为"未指定",按距离升级为驾车/火车(历史数据全是 walk)
- * - drive 太远 → 火车;transit 太远 → 火车
- * - drive 很近(同城) → 步行(同片区短途开车不合理)
- * 用户在弹窗里选的 walk 若距离合理(≤15km)会被保留。
+ * 决定一段路用什么交通方式。
+ *
+ * 两条路径:
+ * 1. **用户明确设置过**(transportModeSet=true)→ 原样尊重,不做任何改判。
+ *    用户就是想 389km 也开车,那是他的选择。
+ * 2. **未设置过**(历史/导入数据的默认值)→ 按距离做合理性修正。
+ *    真实数据里这个字段普遍是 'walk'(等于"未指定"),不修正会出现
+ *    「步行 440km · 88 小时」这种荒谬结果。阈值沿用既有 smartTransportSpeed。
  */
-export function resolveMode(mode: TransportMode, km: number): TransportMode {
+export function resolveMode(mode: TransportMode, km: number, isExplicit = false): TransportMode {
+  if (isExplicit) return mode;
+
   if (mode === 'walk') {
     if (km > DRIVE_MAX_KM) return 'train';
     if (km > WALK_MAX_KM) return 'drive';
@@ -92,6 +103,17 @@ function fallbackDriveMin(km: number): number {
   return Math.max(3, Math.round((km / 40) * 60));
 }
 
+/**
+ * 判定某点的交通方式是否应视为「用户明确设置」。
+ * - 有显式标记 → 用标记;
+ * - 无标记(旧数据)→ walk 是字段默认值(等于"未指定"),其余值都视为有意义,
+ *   否则用户在新版本之前设置过的驾车会被距离规则改判。
+ */
+export function isExplicitTransportMode(mode: TransportMode, flag?: boolean): boolean {
+  if (flag !== undefined) return flag;
+  return mode !== 'walk';
+}
+
 /** 各交通方式的粗略速度(km/h),仅用于无真实路线时的兜底估算 */
 const MODE_SPEED_KMH: Record<TransportMode, number> = {
   walk: 5, drive: 60, transit: 25, train: 200, flight: 700,
@@ -107,7 +129,7 @@ export async function computeSegment(
   drive: DriveFetcher | null,
 ): Promise<SegmentInfo> {
   const straightKm = haversineKm(from.lng, from.lat, to.lng, to.lat);
-  const mode = resolveMode(to.transportMode, straightKm);
+  const mode = resolveMode(to.transportMode, straightKm, isExplicitTransportMode(to.transportMode, to.transportModeSet));
 
   // 非驾车:按各自速度估算,不消耗接口
   if (mode !== 'drive' || !drive) {

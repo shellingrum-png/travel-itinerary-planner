@@ -190,6 +190,7 @@ export default function TripDetail() {
             lng: it.poi!.lng,
             lat: it.poi!.lat,
             transportMode: it.transportMode,
+            transportModeSet: it.transportModeSet,
           } as SegPoint)),
       }));
       const { intraDay, crossDay } = await computeAllSegments(days, getDuration, 5);

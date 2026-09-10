@@ -12,12 +12,17 @@ export function buildItemPatch(
   item: ItineraryItem,
   args: { note?: string; visitMinutes?: number; replacePoi?: PoiSearchResult; transportMode?: TransportMode },
 ): { itemPatch: Partial<ItineraryItem>; upsertPoi?: Poi } {
+  // 用户在此弹窗里选定交通方式 → 打上标记,之后计算时完全尊重、不做距离改判
+  const modePatch = args.transportMode !== undefined
+    ? { transportMode: args.transportMode, transportModeSet: true }
+    : {};
+
   if (args.replacePoi) {
     return {
       itemPatch: {
         poiId: args.replacePoi.id,
         note: args.replacePoi.name,
-        ...(args.transportMode !== undefined ? { transportMode: args.transportMode } : {}),
+        ...modePatch,
       },
       upsertPoi: {
         id: args.replacePoi.id,
@@ -33,7 +38,7 @@ export function buildItemPatch(
   const itemPatch: Partial<ItineraryItem> = {};
   if (args.note !== undefined) itemPatch.note = args.note;
   if (args.visitMinutes !== undefined) itemPatch.visitMinutes = args.visitMinutes;
-  if (args.transportMode !== undefined) itemPatch.transportMode = args.transportMode;
+  Object.assign(itemPatch, modePatch);
   return { itemPatch };
 }
 

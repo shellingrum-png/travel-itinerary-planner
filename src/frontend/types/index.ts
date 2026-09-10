@@ -81,6 +81,12 @@ export interface ItineraryItem {
   orderSeq: number;
   visitMinutes?: number;
   transportMode: TransportMode; // 从上一节点到本节点的交通方式
+  /**
+   * 该交通方式是否为用户明确设置。
+   * false/缺省 = 历史/导入数据的默认值(等于"未指定"),按距离做合理性修正;
+   * true = 用户在「修改」弹窗里选定,完全尊重,不做任何改判。
+   */
+  transportModeSet?: boolean;
   arriveTime?: string;
   leaveTime?: string;
   note?: string;
