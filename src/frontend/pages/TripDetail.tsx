@@ -3,6 +3,10 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { db } from '../services/db';
 import { useOnlineStatus } from '../utils/useOnlineStatus';
 import { solveTsp, savings, solveOpenPath, haversineKm } from '../utils/tsp';
+import {
+  computeAllSegments, fmtSegment, MODE_META,
+  type SegPoint, type SegmentInfo,
+} from '../utils/segments';
 import { getDuration, searchPoiByJS, reverseGeocode, getDrivingPath, resolveTransportHubCoord } from '../services/amap';
 import { getPoiCard } from '../services/llm';
 import { loadAMap } from '../services/amapLoader';
@@ -75,6 +79,10 @@ export default function TripDetail() {
   const [transportSeg, setTransportSeg] = useState<TransportSegmentType>('inter_city');
   const [routeInfo, setRouteInfo] = useState<{ durationMin: number; distanceM: number } | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
+
+  // V11 相邻节点路段(距离/时长):天内相邻段 + 跨天衔接段
+  const [intraSegs, setIntraSegs] = useState<Map<string, (SegmentInfo | null)[]>>(new Map());
+  const [crossSegs, setCrossSegs] = useState<Map<string, SegmentInfo | null>>(new Map());
 
   // V6.2 拖拽排序:当前拖拽的 item / 悬停目标(来源天id|itemId → 目标天id)
   const [dragItem, setDragItem] = useState<{ itemId: string; fromDayId: string } | null>(null);
@@ -159,6 +167,38 @@ export default function TripDetail() {
   const ready = !!trip;
 
   useEffect(() => { load(); }, [load]);
+
+  // ── V11 计算相邻节点路段(天内 + 跨天) ──
+  // 依赖 daySummaries,故增删/拖拽/换交通方式后会自动重算;
+  // getDuration 内部有 routeCache 缓存(30天),重复渲染不会重复请求高德。
+  useEffect(() => {
+    if (!daySummaries.length) {
+      setIntraSegs(new Map());
+      setCrossSegs(new Map());
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      // 只取有坐标的点(否则无法算距离);transportMode 表示「到达该点的方式」
+      const days = daySummaries.map((s) => ({
+        dayId: s.day.id,
+        points: s.items
+          .filter((it) => it.poi && it.poi.lng !== 0 && it.poi.lat !== 0)
+          .map((it) => ({
+            id: it.id,
+            name: it.poi!.name,
+            lng: it.poi!.lng,
+            lat: it.poi!.lat,
+            transportMode: it.transportMode,
+          } as SegPoint)),
+      }));
+      const { intraDay, crossDay } = await computeAllSegments(days, getDuration, 5);
+      if (cancelled) return;
+      setIntraSegs(intraDay);
+      setCrossSegs(crossDay);
+    })().catch(() => { /* 计算失败不影响主流程,只是不显示路段 */ });
+    return () => { cancelled = true; };
+  }, [daySummaries]);
 
   // ── 初始化地图 ──
   useEffect(() => {
@@ -410,21 +450,25 @@ export default function TripDetail() {
     await load();
   };
 
-  // ── 单日行程时长统计(V6.2):按距离+交通方式智能计算路上时间 + 游览时间 ──
+  // ── 单日行程时长统计(V6.2/V11):路上时间优先用真实驾车数据 ──
   const calcDayTiming = (
-    ds: { items: (ItineraryItem & { poi?: Poi })[] },
+    ds: { day: ItineraryDay; items: (ItineraryItem & { poi?: Poi })[] },
   ): { driveMin: number; visitMin: number } => {
-    // 按每个节点的 transportMode 决定该段通勤速度
-    const pois = ds.items
-      .filter((it) => it.poi && it.poi.lng !== 0 && it.poi.lat !== 0);
-    let driveMin = 0;
-    for (let i = 0; i < pois.length - 1; i++) {
-      const a = pois[i].poi!; const b = pois[i + 1].poi!;
-      const mode = pois[i + 1].transportMode || 'walk';
-      const km = haversineKm(a.lng, a.lat, b.lng, b.lat);
-      // 智能选速:距离决定合理通勤(跨城 walk 会被强制升到驾车/火车,避免 89h 这类离谱值)
-      const speedKmh = smartTransportSpeed(mode, km);
-      driveMin += Math.round((km / speedKmh) * 60);
+    const segs = intraSegs.get(ds.day.id);
+    let driveMin: number;
+    if (segs && segs.some((s) => s)) {
+      // 路段已算出(含真实的驾车时长)
+      driveMin = segs.reduce((sum, s) => sum + (s?.durationMin ?? 0), 0);
+    } else {
+      // 路段计算尚未完成时,先用直线估算兜底,避免时长空着
+      const pois = ds.items.filter((it) => it.poi && it.poi.lng !== 0 && it.poi.lat !== 0);
+      driveMin = 0;
+      for (let i = 0; i < pois.length - 1; i++) {
+        const a = pois[i].poi!; const b = pois[i + 1].poi!;
+        const mode = pois[i + 1].transportMode || 'walk';
+        const km = haversineKm(a.lng, a.lat, b.lng, b.lat);
+        driveMin += Math.round((km / smartTransportSpeed(mode, km)) * 60);
+      }
     }
     const visitMin = ds.items.reduce((s, it) => s + (it.visitMinutes ?? 0), 0);
     return { driveMin, visitMin };
@@ -432,6 +476,34 @@ export default function TripDetail() {
 
   const fmtMin = (min: number) =>
     min >= 60 ? `${Math.floor(min / 60)}h${min % 60 ? `${min % 60}m` : ''}` : `${min}m`;
+
+  /**
+   * 某一天里「到达第 idx 个节点」的那段路。
+   * idx>0 → 同一天内的上一站;idx=0 → 上一天的末站(跨天衔接)。
+   * 用「有坐标的点」的位置来索引,与 computeAllSegments 生成的数组对齐。
+   */
+  const arrivalSegmentFor = (
+    dayId: string,
+    item: ItineraryItem & { poi?: Poi },
+  ): { seg: SegmentInfo | null; fromName: string | null; crossDay: boolean } => {
+    if (!item.poi || item.poi.lng === 0 || item.poi.lat === 0) return { seg: null, fromName: null, crossDay: false };
+    const ds = daySummaries.find((s) => s.day.id === dayId);
+    if (!ds) return { seg: null, fromName: null, crossDay: false };
+    const withPoi = ds.items.filter((x) => x.poi && x.poi.lng !== 0 && x.poi.lat !== 0);
+    const pos = withPoi.findIndex((x) => x.id === item.id);
+    if (pos < 0) return { seg: null, fromName: null, crossDay: false };
+
+    if (pos > 0) {
+      const seg = intraSegs.get(dayId)?.[pos - 1] ?? null;
+      return { seg, fromName: withPoi[pos - 1]?.poi?.name ?? null, crossDay: false };
+    }
+    // 本天首点:连到上一天末点
+    const seg = crossSegs.get(dayId) ?? null;
+    const dayIdx = daySummaries.findIndex((s) => s.day.id === dayId);
+    const prev = dayIdx > 0 ? daySummaries[dayIdx - 1] : null;
+    const prevLast = prev?.items.filter((x) => x.poi && x.poi.lng !== 0 && x.poi.lat !== 0).pop();
+    return { seg, fromName: prevLast?.poi?.name ?? null, crossDay: true };
+  };
 
   // V6.2 交通方式 → 预估速度(km/h),用于时长粗算
   const transportSpeedKmh = (mode: TransportMode): number => {
@@ -1379,11 +1451,22 @@ export default function TripDetail() {
                 {/* 行程明细（展开时） */}
                 {detOpen && (
                   <div style={{ marginTop: 10, borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 10 }}>
+                    {/* V11 跨天衔接:本天首站 ← 上一天末站 */}
+                    {(() => {
+                      const cross = crossSegs.get(d.id);
+                      if (!cross) return null;
+                      return (
+                        <div style={{ fontSize: 11, color: '#b8a0e0', padding: '5px 10px', borderRadius: 6, background: 'rgba(184,160,224,0.12)', marginBottom: 8 }}>
+                          ⇡ 距上一天末站 {fmtSegment(cross)}
+                        </div>
+                      );
+                    })()}
                     {ds && ds.items.length > 0 && (() => {
                       const timing = calcDayTiming(ds);
+                      const real = intraSegs.get(d.id)?.some((s) => s?.real);
                       return (
                         <div style={{ fontSize: 12, color: '#7eb8e0', padding: '6px 10px', borderRadius: 6, background: 'rgba(126,184,224,0.1)', marginBottom: 8 }}>
-                          ⏱ 单日总时长 ~{fmtMin(timing.driveMin + timing.visitMin)} = 路上 {fmtMin(timing.driveMin)} + 游览 {fmtMin(timing.visitMin)}
+                          ⏱ 单日总时长 ~{fmtMin(timing.driveMin + timing.visitMin)} = 路上 {fmtMin(timing.driveMin)}{real ? '' : '~'} + 游览 {fmtMin(timing.visitMin)}
                         </div>
                       );
                     })()}
@@ -1391,46 +1474,63 @@ export default function TripDetail() {
                       <div style={{ fontSize: 12, color: '#888' }}>暂无排点</div>
                     ) : (
                       <div style={{ margin: 0 }}>
-                        {ds!.items.map((it, idx) => (
-                          <div
-                            key={it.id}
-                            draggable
-                            onDragStart={handleDragStart(it.id, ds!.day.id)}
-                            onDragEnd={() => { setDragItem(null); setDragOverDayId(null); }}
-                            style={{
-                              fontSize: 13, padding: '6px 4px', borderBottom: idx < ds!.items.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
-                              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-                              cursor: 'grab',
-                              background: dragItem?.itemId === it.id ? 'rgba(6,214,160,0.12)' : 'transparent',
-                              borderRadius: 6,
-                            }}
-                          >
-                            <span style={{ cursor: 'grab', color: '#555', fontSize: 14, userSelect: 'none' }} title="拖拽排序/跨天">⋮⋮</span>
+                        {ds!.items.map((it, idx) => {
+                          const arr = arrivalSegmentFor(ds!.day.id, it);
+                          return (
+                          <div key={it.id}>
+                            {/* V11 到达本站的路段(带起终点名的连接线) */}
+                            {arr.seg && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#8fa8c0', padding: '3px 4px 3px 22px' }}>
+                                <span style={{ color: '#556' }}>↳</span>
+                                {arr.fromName && (
+                                  <span style={{ color: '#6b7a8f', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {arr.fromName} →
+                                  </span>
+                                )}
+                                <span>{MODE_META[arr.seg.mode].icon} {fmtSegment(arr.seg)}</span>
+                                {arr.crossDay && <span style={{ color: '#b8a0e0', fontSize: 10 }}>· 跨天</span>}
+                              </div>
+                            )}
                             <div
-                              style={{ flex: 1, overflow: 'hidden', cursor: it.poi ? 'pointer' : 'default' }}
-                              onClick={(e) => { e.stopPropagation(); it.poi && focusPoi(it.id); }}
-                              title={it.poi ? '点击地图定位' : ''}
+                              draggable
+                              onDragStart={handleDragStart(it.id, ds!.day.id)}
+                              onDragEnd={() => { setDragItem(null); setDragOverDayId(null); }}
+                              style={{
+                                fontSize: 13, padding: '6px 4px', borderBottom: idx < ds!.items.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
+                                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                                cursor: 'grab',
+                                background: dragItem?.itemId === it.id ? 'rgba(6,214,160,0.12)' : 'transparent',
+                                borderRadius: 6,
+                              }}
                             >
-                              <span style={{ color: '#888' }}>{idx + 1}.</span>{' '}
-                              <strong>{it.poi?.name || it.note || it.itemType}</strong>
-                              {it.visitMinutes != null && it.visitMinutes > 0 && <span style={{ color: '#888', fontSize: 11 }}> · {it.visitMinutes}min</span>}
-                              {it.itemType === 'hotel' && <span style={{ color: '#7ec8ff', fontSize: 11, marginLeft: 4 }}>🏨</span>}
-                              {it.itemType === 'transport' && <span style={{ color: '#ffa07a', fontSize: 11, marginLeft: 4 }}>🚗</span>}
-                            </div>
-                            <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-                              <button
-                                onClick={() => openItemEdit(it)}
-                                title="修改名称/时长/门票/更换景点"
-                                style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#ddd', cursor: 'pointer' }}
-                              >修改</button>
-                              <button
-                                onClick={() => handleRemoveItem(it.id)}
-                                title="删除此节点"
-                                style={{ background: 'rgba(255,0,0,0.15)', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#ff6b6b', cursor: 'pointer' }}
-                              >🗑删除</button>
+                              <span style={{ cursor: 'grab', color: '#555', fontSize: 14, userSelect: 'none' }} title="拖拽排序/跨天">⋮⋮</span>
+                              <div
+                                style={{ flex: 1, overflow: 'hidden', cursor: it.poi ? 'pointer' : 'default' }}
+                                onClick={(e) => { e.stopPropagation(); it.poi && focusPoi(it.id); }}
+                                title={it.poi ? '点击地图定位' : ''}
+                              >
+                                <span style={{ color: '#888' }}>{idx + 1}.</span>{' '}
+                                <strong>{it.poi?.name || it.note || it.itemType}</strong>
+                                {it.visitMinutes != null && it.visitMinutes > 0 && <span style={{ color: '#888', fontSize: 11 }}> · {it.visitMinutes}min</span>}
+                                {it.itemType === 'hotel' && <span style={{ color: '#7ec8ff', fontSize: 11, marginLeft: 4 }}>🏨</span>}
+                                {it.itemType === 'transport' && <span style={{ color: '#ffa07a', fontSize: 11, marginLeft: 4 }}>🚗</span>}
+                              </div>
+                              <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                                <button
+                                  onClick={() => openItemEdit(it)}
+                                  title="修改名称/时长/门票/更换景点"
+                                  style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#ddd', cursor: 'pointer' }}
+                                >修改</button>
+                                <button
+                                  onClick={() => handleRemoveItem(it.id)}
+                                  title="删除此节点"
+                                  style={{ background: 'rgba(255,0,0,0.15)', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#ff6b6b', cursor: 'pointer' }}
+                                >🗑删除</button>
+                              </div>
                             </div>
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                     {/* 大交通行(恒渲染,不随景点清空隐藏) */}
@@ -1761,6 +1861,13 @@ export default function TripDetail() {
       defaultCity={trip?.destination ?? ''}
       currency={trip?.currency ?? 'CNY'}
       linkedTicket={linkedTicket}
+      isFirstStop={(() => {
+        if (!editingItem) return false;
+        const ds = daySummaries.find((s) => s.day.id === editingItem.dayId);
+        if (!ds) return false;
+        const withPoi = ds.items.filter((x) => x.poi && x.poi.lng !== 0 && x.poi.lat !== 0);
+        return withPoi[0]?.id === editingItem.id;
+      })()}
       onCancel={() => setEditingItem(null)}
       onSave={(p) => (editingItem ? handleSaveItemEdit(editingItem, p) : Promise.resolve())}
     />

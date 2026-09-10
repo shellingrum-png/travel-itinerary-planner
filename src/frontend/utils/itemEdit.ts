@@ -1,19 +1,24 @@
 // 行程卡片「修改」弹窗的核心纯逻辑:构建设项补丁 + 门票记账动作(可单测)
-import type { ItineraryItem, Expense, Trip, Poi } from '../types';
+import type { ItineraryItem, Expense, Trip, Poi, TransportMode } from '../types';
 import type { PoiSearchResult } from '../services/amap';
 
 /**
  * 构建设项更新补丁。
  * - 更换景点(replacePoi) → itemPatch = { poiId, note: 新名 }(note 覆盖手输,保证显示名=新景点),并返回需 upsert 的 poi 供坐标加载
  * - 无更换 → 只含传入的 note/visitMinutes,过滤 undefined
+ * - transportMode(到达本站的交通方式)两分支都保留
  */
 export function buildItemPatch(
   item: ItineraryItem,
-  args: { note?: string; visitMinutes?: number; replacePoi?: PoiSearchResult },
+  args: { note?: string; visitMinutes?: number; replacePoi?: PoiSearchResult; transportMode?: TransportMode },
 ): { itemPatch: Partial<ItineraryItem>; upsertPoi?: Poi } {
   if (args.replacePoi) {
     return {
-      itemPatch: { poiId: args.replacePoi.id, note: args.replacePoi.name },
+      itemPatch: {
+        poiId: args.replacePoi.id,
+        note: args.replacePoi.name,
+        ...(args.transportMode !== undefined ? { transportMode: args.transportMode } : {}),
+      },
       upsertPoi: {
         id: args.replacePoi.id,
         name: args.replacePoi.name,
@@ -28,6 +33,7 @@ export function buildItemPatch(
   const itemPatch: Partial<ItineraryItem> = {};
   if (args.note !== undefined) itemPatch.note = args.note;
   if (args.visitMinutes !== undefined) itemPatch.visitMinutes = args.visitMinutes;
+  if (args.transportMode !== undefined) itemPatch.transportMode = args.transportMode;
   return { itemPatch };
 }
 

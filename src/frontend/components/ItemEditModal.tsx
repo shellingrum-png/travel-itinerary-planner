@@ -1,25 +1,38 @@
 import { useState } from 'react';
 import { input, btn, btnGhost, btnDanger, C } from './ui';
 import { searchPoiByJS, type PoiSearchResult } from '../services/amap';
-import type { ItineraryItem, Poi } from '../types';
+import type { ItineraryItem, Poi, TransportMode } from '../types';
 
 export interface EditPatch {
   visitMinutes?: number;
   note?: string;
   ticket?: number;
   replacePoi?: PoiSearchResult;
+  /** 从上一站到本站的交通方式 */
+  transportMode?: TransportMode;
 }
+
+/** 可选的到达方式(顺序即展示顺序) */
+const MODE_OPTIONS: Array<{ value: TransportMode; icon: string; label: string }> = [
+  { value: 'walk', icon: '🚶', label: '步行' },
+  { value: 'drive', icon: '🚗', label: '驾车' },
+  { value: 'transit', icon: '🚌', label: '公交' },
+  { value: 'train', icon: '🚄', label: '火车' },
+  { value: 'flight', icon: '✈️', label: '飞机' },
+];
 
 interface Props {
   item: (ItineraryItem & { poi?: Poi }) | null;
   defaultCity: string;
   currency: string;
   linkedTicket?: number;
+  /** 是否为当天首个有坐标的节点(此时该段是跨天衔接) */
+  isFirstStop?: boolean;
   onCancel: () => void;
   onSave: (patch: EditPatch) => Promise<void>;
 }
 
-export default function ItemEditModal({ item, defaultCity, currency, linkedTicket, onCancel, onSave }: Props) {
+export default function ItemEditModal({ item, defaultCity, currency, linkedTicket, isFirstStop, onCancel, onSave }: Props) {
   const [visitMin, setVisitMin] = useState(item ? String(item.visitMinutes ?? 90) : '');
   const [note, setNote] = useState(item?.note ?? '');
   const [ticket, setTicket] = useState(linkedTicket != null ? String(linkedTicket) : '');
@@ -29,6 +42,7 @@ export default function ItemEditModal({ item, defaultCity, currency, linkedTicke
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<PoiSearchResult | null>(null);
   const [saving, setSaving] = useState(false);
+  const [mode, setMode] = useState<TransportMode>(item?.transportMode ?? 'drive');
 
   if (!item) return null;
   const isPoi = item.itemType === 'poi';
@@ -51,6 +65,7 @@ export default function ItemEditModal({ item, defaultCity, currency, linkedTicke
         note: note.trim(),
         ticket: isPoi ? tk : undefined,
         replacePoi: isPoi && selected ? selected : undefined,
+        transportMode: mode,
       });
     } finally { setSaving(false); }
   };
@@ -75,6 +90,29 @@ export default function ItemEditModal({ item, defaultCity, currency, linkedTicke
             <input type="number" value={visitMin} onChange={(e) => setVisitMin(e.target.value)} style={{ ...input, marginBottom: 10 }} placeholder="如 90" />
             <label style={{ fontSize: 12, color: '#999', display: 'block', marginBottom: 4 }}>门票价(元)</label>
             <input type="number" value={ticket} onChange={(e) => setTicket(e.target.value)} style={{ ...input, marginBottom: 10 }} placeholder="0 表示免费/不填" />
+
+            <label style={{ fontSize: 12, color: '#999', display: 'block', marginBottom: 4 }}>
+              {isFirstStop ? '从上一天末站到这里的交通方式' : '到达这里的交通方式'}
+            </label>
+            <div style={{ display: 'flex', gap: 5, marginBottom: 6, flexWrap: 'wrap' }}>
+              {MODE_OPTIONS.map((m) => (
+                <button
+                  key={m.value}
+                  onClick={() => setMode(m.value)}
+                  style={{
+                    flex: '1 0 60px', padding: '6px 4px', fontSize: 12, cursor: 'pointer',
+                    border: 'none', borderRadius: 6,
+                    background: mode === m.value ? '#1677ff' : 'rgba(255,255,255,0.08)',
+                    color: mode === m.value ? '#fff' : '#aaa',
+                  }}
+                >
+                  {m.icon} {m.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: '#6b7a8f', marginBottom: 10, lineHeight: 1.5 }}>
+              卡片上显示的距离/时长按此方式计算。3 公里内默认按步行展示(同城短途开车不合理)。
+            </div>
           </>
         )}
 

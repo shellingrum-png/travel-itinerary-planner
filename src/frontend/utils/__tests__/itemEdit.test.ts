@@ -25,6 +25,22 @@ describe('buildItemPatch', () => {
     const r = buildItemPatch(item, { note: '手输名', replacePoi: poi });
     expect(r.itemPatch.note).toBe('塔尔寺');
   });
+
+  // V11 到达方式
+  it('transportMode 被写入补丁', () => {
+    const r = buildItemPatch(item, { transportMode: 'drive' });
+    expect(r.itemPatch.transportMode).toBe('drive');
+  });
+  it('未传 transportMode 时不覆盖原值', () => {
+    const r = buildItemPatch(item, { note: 'x' });
+    expect(r.itemPatch.transportMode).toBeUndefined();
+    expect('transportMode' in r.itemPatch).toBe(false);
+  });
+  it('更换景点时也保留 transportMode', () => {
+    const r = buildItemPatch(item, { replacePoi: poi, transportMode: 'transit' });
+    expect(r.itemPatch.transportMode).toBe('transit');
+    expect(r.itemPatch.poiId).toBe('p2');
+  });
 });
 
 describe('ticketAction', () => {
