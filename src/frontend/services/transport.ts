@@ -4,6 +4,7 @@
  * 后端地址:本地 http://localhost:8766,可通过 VITE_TRANSPORT_API 覆盖
  */
 import type { Trip } from '../types';
+import { getAccessToken } from './auth';
 
 // VITE_TRANSPORT_API 是「源站」:未配置→本地 8766;配置为空→同源(生产经 Nginx 反代 /api)
 const TRANSPORT_ORIGIN = import.meta.env.VITE_TRANSPORT_API ?? 'http://localhost:8766';
@@ -49,7 +50,8 @@ export async function searchTransport(
   date: string,
 ): Promise<TransportOption[]> {
   const url = `${BASE}/transport?mode=${mode}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&date=${date}`;
-  const res = await fetch(url);
+  const token = await getAccessToken();
+  const res = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
   const json = (await res.json()) as TransportResponse;
   if (!json.ok || json.error) {
     throw new Error(json.error || '查询失败');

@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import MapView from '../components/MapView';
 import type { MarkerDef } from '../components/MapView';
 import { useStagedStore } from '../stores/stagedStore';
+import { getAccessToken } from '../services/auth';
 
 const WEB_KEY = import.meta.env.VITE_AMAP_WEB_KEY || '9a5f6f729b7e6e7577d18d31a5d52e97';
 // 生产设 VITE_AMAP_PROXY=proxy → 同源代理 /api/amap/place(隐藏 Web 服务 key)
@@ -38,7 +39,8 @@ export default function PoiSearch() {
       const url = AMAP_PROXY
         ? `${AMAP_PROXY}/api/amap/place?keywords=${encodeURIComponent(keyword)}&city=${encodeURIComponent(city)}`
         : `https://restapi.amap.com/v3/place/text?key=${WEB_KEY}&keywords=${encodeURIComponent(keyword)}&city=${encodeURIComponent(city)}&offset=20`;
-      const data = await fetch(url).then((r) => r.json());
+      const token = AMAP_PROXY ? await getAccessToken() : null;
+      const data = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined).then((r) => r.json());
 
       if (data.status !== '1') {
         setError(data.info || '检索失败');

@@ -8,6 +8,7 @@
  * 5. 用户手动覆盖(UI 层锁定, 不被上述层覆盖)
  */
 import { db } from './db';
+import { getAccessToken } from './auth';
 import type { PoiAiCard, PoiCategory } from '../types';
 
 const BASE_URL = import.meta.env.VITE_LLM_BASE_URL || 'https://api.deepseek.com/v1';
@@ -79,10 +80,11 @@ export async function getPoiCard(
   // ── 第 3 层: LLM 生成 ──
   if (IS_PROXY || (API_KEY && API_KEY !== 'your_llm_api_key')) {
     try {
+      const token = IS_PROXY ? await getAccessToken() : null;
       const res = await fetch(`${BASE_URL}/chat/completions`, {
         method: 'POST',
         headers: IS_PROXY
-          ? { 'Content-Type': 'application/json' }
+          ? { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }
           : { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: MODEL,

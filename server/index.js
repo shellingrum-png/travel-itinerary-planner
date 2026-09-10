@@ -208,6 +208,7 @@ const server = http.createServer(async (req, res) => {
 
   // 交通查询
   if (url.pathname === '/api/transport' && req.method === 'GET') {
+    if (!(await requireUser(req))) return sendJson(res, 401, { ok: false, error: '未登录' });
     const q = url.searchParams;
     const mode = q.get('mode') || 'train';
     const from = q.get('from') || '';
@@ -220,6 +221,7 @@ const server = http.createServer(async (req, res) => {
 
   // LLM 代理:POST /api/llm/chat/completions (key 在服务端,前端零泄露)
   if (url.pathname === '/api/llm/chat/completions' && req.method === 'POST') {
+    if (!(await requireUser(req))) return sendJson(res, 401, { ok: false, error: '未登录' });
     if (!LLM_API_KEY) return sendJson(res, 500, { ok: false, error: '未配置 LLM_API_KEY' });
     const body = await readBody(req);
     // 白名单透传;模型由服务端决定(前端不覆盖),key 由服务端注入
@@ -246,6 +248,7 @@ const server = http.createServer(async (req, res) => {
 
   // 高德代理:GET /api/amap/place (Web 服务 key 在服务端)
   if (url.pathname === '/api/amap/place' && req.method === 'GET') {
+    if (!(await requireUser(req))) return sendJson(res, 401, { ok: false, error: '未登录' });
     const keywords = url.searchParams.get('keywords') || '';
     const city = url.searchParams.get('city') || '';
     const keyVal = AMAP_WEB_KEY || url.searchParams.get('key') || '';
