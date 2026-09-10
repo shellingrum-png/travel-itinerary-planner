@@ -20,12 +20,14 @@ export default function AuthPage() {
         await signIn(email, password);
         // 登录成功由 App.tsx 的 onAuthStateChange 处理清库+重拉
       } else {
-        const u = await signUp(email, password);
-        if (u && u.id) {
-          // 直接拿到 session → 交给 App 处理
+        const { hasSession } = await signUp(email, password);
+        if (hasSession) {
+          // 注册即登录,交给 App 的 onAuthStateChange 处理
           setNotice('注册成功,正在进入…');
         } else {
+          // 未拿到 session(如服务端要求邮箱确认)
           setNotice('注册成功,请到邮箱确认后再登录');
+          setMode('login');
         }
       }
     } catch (e: any) {

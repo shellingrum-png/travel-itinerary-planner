@@ -28,8 +28,9 @@ export async function signIn(email: string, password: string) {
 export async function signUp(email: string, password: string) {
   const { data, error } = await supabase.auth.signUp({ email, password });
   if (error) throw new Error(error.message);
-  // 若未开启邮箱确认,session 可能直接存在;开启则需用户点确认邮件
-  return data.session?.user ?? data.user ?? null;
+  // 返回 session 是否存在 —— 用于区分「注册即登录」与「需邮箱确认」
+  // (未确认时 user 对象也会有值,故不能用 user 判断)
+  return { hasSession: Boolean(data.session), user: data.user ?? null };
 }
 
 export async function signOut() {
