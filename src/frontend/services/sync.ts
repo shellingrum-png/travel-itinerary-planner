@@ -35,7 +35,9 @@ export interface SnapshotStorage {
 }
 
 // ── 存储后端:自建 server(默认) ──
-const BACKEND_BASE = import.meta.env.VITE_SYNC_API || 'http://localhost:8766';
+// VITE_SYNC_API 是「源站」:未配置→本地 8766;配置为空→同源(生产经 Nginx 反代 /api)
+const SYNC_ORIGIN = import.meta.env.VITE_SYNC_API ?? 'http://localhost:8766';
+const BACKEND_BASE = `${SYNC_ORIGIN}/api`;
 
 // 带登录 token 的请求头(后端 /api/snapshot 需鉴权)
 async function authHeaders(extra: Record<string, string> = {}): Promise<Record<string, string>> {
@@ -45,22 +47,22 @@ async function authHeaders(extra: Record<string, string> = {}): Promise<Record<s
 
 class BackendSnapshotStorage implements SnapshotStorage {
   async save(tripId: string, snap: TripSnapshot): Promise<void> {
-    await fetch(`${BACKEND_BASE}/api/snapshot/${tripId}`, {
+    await fetch(`${BACKEND_BASE}/snapshot/${tripId}`, {
       method: 'PUT',
       headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(snap),
     });
   }
   async load(tripId: string): Promise<TripSnapshot | null> {
-    const res = await fetch(`${BACKEND_BASE}/api/snapshot/${tripId}`, { headers: await authHeaders() });
+    const res = await fetch(`${BACKEND_BASE}/snapshot/${tripId}`, { headers: await authHeaders() });
     if (!res.ok) return null;
     return res.json();
   }
   async remove(tripId: string): Promise<void> {
-    await fetch(`${BACKEND_BASE}/api/snapshot/${tripId}`, { method: 'DELETE', headers: await authHeaders() });
+    await fetch(`${BACKEND_BASE}/snapshot/${tripId}`, { method: 'DELETE', headers: await authHeaders() });
   }
   async list(): Promise<CloudTripRef[]> {
-    const res = await fetch(`${BACKEND_BASE}/api/snapshot`, { headers: await authHeaders() });
+    const res = await fetch(`${BACKEND_BASE}/snapshot`, { headers: await authHeaders() });
     return res.json();
   }
 }

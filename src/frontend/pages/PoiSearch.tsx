@@ -5,8 +5,9 @@ import type { MarkerDef } from '../components/MapView';
 import { useStagedStore } from '../stores/stagedStore';
 
 const WEB_KEY = import.meta.env.VITE_AMAP_WEB_KEY || '9a5f6f729b7e6e7577d18d31a5d52e97';
-// 生产环境走后端代理(VITE_AMAP_PROXY=/api),隐藏 Web 服务 key;开发环境直连 restapi
-const AMAP_PROXY = import.meta.env.VITE_AMAP_PROXY || '';
+// 生产设 VITE_AMAP_PROXY=proxy → 同源代理 /api/amap/place(隐藏 Web 服务 key)
+// 未设置(开发)→ 直连 restapi,用 .env 里的 Web 服务 key
+const AMAP_PROXY: string | null = import.meta.env.VITE_AMAP_PROXY === 'proxy' ? '/api' : null;
 
 interface SearchResult {
   id: string;

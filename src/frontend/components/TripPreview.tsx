@@ -114,7 +114,19 @@ export default function TripPreview({ trip, daySummaries }: TripPreviewProps) {
 
   const copyAddress = async (addr: string) => {
     try {
-      await navigator.clipboard.writeText(addr);
+      // navigator.clipboard 是 SecureContext-only(http://纯IP 下不可用),降级到 execCommand
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(addr);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = addr;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch { /* ignore */ }

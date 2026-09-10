@@ -7,6 +7,7 @@ import CreateWizard from '../components/CreateWizard';
 import { listBackedUpTrips, restoreTrip, reconcile } from '../services/sync';
 import { isAuthConfigured, signOut } from '../services/auth';
 import { C, btn, btnGhost, btnSmall } from '../components/ui';
+import { uuid } from '../utils/uuid';
 
 export default function TripList() {
   const [trips, setTrips] = useState<Trip[]>([]);
@@ -68,7 +69,7 @@ export default function TripList() {
       const s = seedData as any;
       const existing = await db.listTrips();
       const sameTitle = existing.find((t) => t.title === s.trip.title);
-      const tripId = sameTitle ? sameTitle.id : crypto.randomUUID();
+      const tripId = sameTitle ? sameTitle.id : uuid();
 
       // 清除旧同名旅程的全部天数+排点(保留 id 与天数骨架可统一重建)
       const oldDays = await db.listDays(tripId);
@@ -96,7 +97,7 @@ export default function TripList() {
         await db.updateItem(day.id, { note: sd.theme });
 
         for (const lm of (sd.landmarks || [])) {
-          const poiId = crypto.randomUUID();
+          const poiId = uuid();
           const name = typeof lm === 'string' ? lm : lm.name;
           const lng = typeof lm === 'object' ? lm.lng : 0;
           const lat = typeof lm === 'object' ? lm.lat : 0;

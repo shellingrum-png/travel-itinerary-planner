@@ -5,8 +5,8 @@ interface ImportMetaEnv {
   readonly VITE_AMAP_JS_KEY: string;
   readonly VITE_AMAP_JS_SECRET: string;
   readonly VITE_AMAP_PROXY: string;
-  readonly VITE_TRANSPORT_API: string;
-  readonly VITE_SYNC_API: string;
+  readonly VITE_TRANSPORT_API?: string;
+  readonly VITE_SYNC_API?: string;
   readonly VITE_LLM_BASE_URL: string;
   readonly VITE_LLM_API_KEY: string;
   readonly VITE_LLM_MODEL: string;

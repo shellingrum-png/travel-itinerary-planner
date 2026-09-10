@@ -4,6 +4,7 @@
  */
 import { db } from './db';
 import type { TripTemplate, CityNode, Trip, ItineraryItem, Poi, Hotel } from '../types';
+import { uuid } from '../utils/uuid';
 
 /** 模板 content_json 内部结构 */
 export interface TemplateContent {
@@ -81,7 +82,7 @@ export async function applyTemplate(
 
     // 景点
     for (const lm of dayData.landmarks || []) {
-      const poiId = crypto.randomUUID();
+      const poiId = uuid();
       await db.upsertPoi({
         id: poiId,
         name: lm.name,
@@ -101,7 +102,7 @@ export async function applyTemplate(
 
     // 酒店
     if (dayData.hotel) {
-      const poiId = crypto.randomUUID();
+      const poiId = uuid();
       await db.upsertPoi({
         id: poiId,
         name: dayData.hotel.name,

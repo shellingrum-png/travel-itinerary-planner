@@ -17,6 +17,7 @@ import type {
   TripTemplate,
 } from '../types';
 import type { Db } from './db';
+import { uuid } from '../utils/uuid';
 
 class TravelDb extends Dexie implements Db {
   trips!: Table<Trip, string>;
@@ -65,7 +66,7 @@ class TravelDb extends Dexie implements Db {
 
   /** 新增旅程;id 缺省随机生成,恢复时传原 id 保持本地=云端一致 */
   async createTrip(input: Omit<Trip, 'id' | 'status'>, id?: string): Promise<Trip> {
-    const tripId = id || crypto.randomUUID();
+    const tripId = id || uuid();
     const now = new Date().toISOString();
     const trip: Trip = { ...input, id: tripId, status: 'planning', updatedAt: now };
     const days = generateDays(trip.startDate, trip.endDate);
@@ -122,7 +123,7 @@ class TravelDb extends Dexie implements Db {
   async addDay(tripId: string, date: string): Promise<ItineraryDay> {
     const days = await this.itineraryDays.where({ tripId }).sortBy('daySeq');
     const insertIdx = days.findIndex(d => d.date > date);
-    const id = crypto.randomUUID();
+    const id = uuid();
     const newDay: ItineraryDay = {
       id, tripId, daySeq: 0, date,
     };
@@ -169,7 +170,7 @@ class TravelDb extends Dexie implements Db {
   }
 
   async addItem(item: Omit<ItineraryItem, 'id' | 'orderSeq'>): Promise<ItineraryItem> {
-    const id = crypto.randomUUID();
+    const id = uuid();
     const max = await this.itineraryItems.where({ dayId: item.dayId }).count();
     const created: ItineraryItem = { ...item, id, orderSeq: max };
     await this.itineraryItems.add(created);
@@ -255,7 +256,7 @@ class TravelDb extends Dexie implements Db {
   }
 
   async addExpense(exp: Omit<Expense, 'id' | 'dirty'>): Promise<Expense> {
-    const id = crypto.randomUUID();
+    const id = uuid();
     const created: Expense = { ...exp, id, dirty: 0 };
     await this.expenses.add(created);
     return created;
@@ -336,7 +337,7 @@ class TravelDb extends Dexie implements Db {
   }
 
   async addHotel(hotel: Omit<Hotel, 'id'>): Promise<Hotel> {
-    const id = crypto.randomUUID();
+    const id = uuid();
     const created: Hotel = { ...hotel, id };
     await this.hotels.add(created);
     return created;
@@ -357,7 +358,7 @@ class TravelDb extends Dexie implements Db {
   }
 
   async addTransport(transport: Omit<Transport, 'id'>): Promise<Transport> {
-    const id = crypto.randomUUID();
+    const id = uuid();
     const created: Transport = { ...transport, id };
     await this.transports.add(created);
     return created;
@@ -431,7 +432,7 @@ function generateDays(
   let seq = 0;
   for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
     days.push({
-      id: crypto.randomUUID(),
+      id: uuid(),
       daySeq: ++seq,
       date: d.toISOString().slice(0, 10),
     });

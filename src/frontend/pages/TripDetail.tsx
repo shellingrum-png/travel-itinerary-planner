@@ -13,6 +13,7 @@ import ItemEditModal, { type EditPatch } from '../components/ItemEditModal';
 import { modeIcon, fmtDT, dayTransports, isBigTransportMode } from '../utils/transportFormat';
 import { buildItemPatch, ticketAction } from '../utils/itemEdit';
 import type { Trip, ItineraryDay, ItineraryItem, Poi, PoiAiCard, Hotel, TransportMode, Transport, TransportModeType, TransportSegmentType } from '../types';
+import { uuid } from '../utils/uuid';
 
 const DAY_COLORS = [
   '#ff6b6b','#ffd166','#06d6a0','#118ab2','#ef476f',
@@ -866,7 +867,7 @@ export default function TripDetail() {
           if (!targetDay) continue;
 
           // 写入POI
-          const poiId = it.poiId || crypto.randomUUID();
+          const poiId = it.poiId || uuid();
           if (it.poi) await db.upsertPoi({ ...it.poi, id: poiId });
 
           // 写入行程项
