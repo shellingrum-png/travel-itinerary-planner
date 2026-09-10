@@ -94,4 +94,4 @@ export interface Db {
 // 占位导出,后续替换为 Dexie 实现
 export const ROUTE_CACHE_TTL_DAYS = 30;
 
-export { travelDb as db, setActiveDb, migrateLegacyDb, getActiveDb, LEGACY_DB_NAME } from './dexie';
+export { travelDb as db, setActiveDb, migrateLegacyDb, getActiveDb, getLegacyTripIds, LEGACY_DB_NAME } from './dexie';

@@ -4,8 +4,14 @@
  * 设计:存储后端可插拔 —— 现在用自建后端(JSON文件),后续换 Supabase 只改 STORAGE 实现,业务逻辑不变。
  */
 import { db } from './db';
+import { getLegacyTripIds } from './db';
 import { getAccessToken } from './auth';
 import type { Trip, ItineraryDay, ItineraryItem, Poi, PoiAiCard, Expense, Hotel, Transport } from '../types';
+
+/** 只删本地副本,不动云端(用于清理继承来的脏数据) */
+async function removeLocalTrip(tripId: string): Promise<void> {
+  try { await db.deleteTrip(tripId); } catch (e) { console.warn('[sync] 清理本地脏数据失败:', tripId, e); }
+}
 
 /** 单个旅程的完整数据快照 */
 export interface TripSnapshot {
@@ -188,6 +194,21 @@ export async function reconcile(): Promise<{ pushed: number; pulled: number; fai
 
     const localIds = new Set(localById.keys());
     const cloudIds = new Set(cloudById.keys());
+
+    // 清掉「继承自旧库但云端不属于本账号」的脏数据。
+    // 起因:早期 migrateLegacyDb 迁移后没销毁旧库,导致后续每个新账号
+    // 登录时都继承了同一批历史旅程;这些旅程云端属于别的账号,不属于当前用户。
+    // 特征:本地有、云端无、且 id 在历史遗产清单里 → 从本账号本地库删除。
+    const legacyIds = new Set(getLegacyTripIds());
+    if (legacyIds.size) {
+      for (const id of localIds) {
+        if (legacyIds.has(id) && !cloudIds.has(id)) {
+          await removeLocalTrip(id);
+          localById.delete(id);
+          localIds.delete(id);
+        }
+      }
+    }
 
     // 推送本地有、云端没有的
     for (const id of localIds) {

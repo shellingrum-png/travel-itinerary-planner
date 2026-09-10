@@ -491,7 +491,15 @@ export async function setActiveDb(userId: string | null | undefined): Promise<vo
   activeDb = next;
 }
 
-/** 把旧的单库数据(若存在)整个迁移到目标账号库,确保老用户数据不丢 */
+/**
+ * 把旧的单库数据迁到目标账号库，然后【销毁旧库】。
+ *
+ * 销毁是必须的：旧库对所有账号可见，若不销毁，之后每个新登录的账号
+ * 都会再继承一遍这些数据（曾经导致新账号看到别人的旅程）。
+ *
+ * 同时把旧库的 trip id 记到 localStorage，供 reconcile 识别并清除
+ * 「已被其他账号继承」的本地脏数据。
+ */
 export async function migrateLegacyDb(targetUserId: string): Promise<boolean> {
   if (!(await Dexie.exists(LEGACY_DB_NAME))) return false;
 
@@ -510,35 +518,52 @@ export async function migrateLegacyDb(targetUserId: string): Promise<boolean> {
     for (const t of TABLES) {
       dump[t] = await (legacy as any)[t].toArray();
     }
+    legacy.close();
   } catch (e) {
     console.warn('[db] 读取旧库失败', e);
     try { legacy.close(); } catch { /* ignore */ }
     return false;
-  } finally {
-    try { legacy.close(); } catch { /* ignore */ }
   }
 
-  if (!dump.trips?.length) return false;
+  // 记录旧数据的 id,供后续识别继承污染
+  if (dump.trips?.length) {
+    try { localStorage.setItem(LEGACY_IDS_KEY, JSON.stringify(dump.trips.map((t: any) => t.id))); } catch { /* ignore */ }
+  }
 
-  // 2. 写入账号库(目标库已有数据则不动,避免覆盖新数据)
+  let migrated = false;
   const target = new TravelDb(dbNameForUser(targetUserId));
   try {
     await target.open();
-    if ((await target.listTrips()).length > 0) { target.close(); return false; }
-
-    await target.transaction('rw', TABLES.map((t) => (target as any)[t]), async () => {
-      for (const t of TABLES) {
-        if (dump[t]?.length) await (target as any)[t].bulkAdd(dump[t]);
-      }
-    });
-    console.log(`[db] 已把历史数据(${dump.trips.length} 个旅程)迁移到账号库`);
-    return true;
+    // 目标账号库为空才写入（已有数据说明已被认领，不覆盖）
+    if ((await target.listTrips()).length === 0 && dump.trips?.length) {
+      await target.transaction('rw', TABLES.map((t) => (target as any)[t]), async () => {
+        for (const t of TABLES) {
+          if (dump[t]?.length) await (target as any)[t].bulkAdd(dump[t]);
+        }
+      });
+      migrated = true;
+      console.log(`[db] 已把历史数据(${dump.trips.length} 个旅程)迁移到账号库`);
+    }
   } catch (e) {
     console.warn('[db] 历史数据迁移失败', e);
     return false;
   } finally {
     try { target.close(); } catch { /* ignore */ }
   }
+
+  // 2. 无论是否写入，旧库都必须销毁，否则会被下一个账号再次继承
+  try { await Dexie.delete(LEGACY_DB_NAME); } catch { /* ignore */ }
+  return migrated;
+}
+
+const LEGACY_IDS_KEY = 'travel_legacy_claimed_ids';
+
+/** 旧库里的旅程 id（即「历史遗产」），用于识别本地脏数据 */
+export function getLegacyTripIds(): string[] {
+  try {
+    const raw = localStorage.getItem(LEGACY_IDS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
 }
 
 /**
