@@ -189,8 +189,21 @@ export async function listBackedUpTrips(): Promise<CloudTripRef[]> {
  *  - 本地有、云端无 → 推送备份(首次/新旅程)
  *  - 都有 → 比 updatedAt,新的覆盖旧的
  * 返回 { pushed, pulled } 用于 UI 提示。
+ *
+ * ⚠️ 并发保护:App 启动与 TripList 挂载都会调 reconcile,若无保护会并发跑两次。
+ * 二者交错时,一次 restoreTrip 会写入"当前时间"的 updatedAt,另一次会判定
+ * "本地比云端新"而把「尚未恢复完的空壳」备份回云端 → 覆盖真实数据(2026-09-11 事故)。
+ * 这里用 in-flight Promise 去重:同一时刻只允许一次 reconcile,后来者复用同一结果。
  */
-export async function reconcile(): Promise<{ pushed: number; pulled: number; failed: number }> {
+let reconcileInFlight: Promise<{ pushed: number; pulled: number; failed: number }> | null = null;
+
+export function reconcile(): Promise<{ pushed: number; pulled: number; failed: number }> {
+  if (reconcileInFlight) return reconcileInFlight;
+  reconcileInFlight = runReconcile().finally(() => { reconcileInFlight = null; });
+  return reconcileInFlight;
+}
+
+async function runReconcile(): Promise<{ pushed: number; pulled: number; failed: number }> {
   let pushed = 0;
   let pulled = 0;
   let failed = 0;
