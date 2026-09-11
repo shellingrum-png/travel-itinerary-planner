@@ -65,7 +65,12 @@ class BackendSnapshotStorage implements SnapshotStorage {
     return res.json();
   }
   async remove(tripId: string): Promise<void> {
-    await fetch(`${BACKEND_BASE}/snapshot/${tripId}`, { method: 'DELETE', headers: await authHeaders() });
+    const res = await fetch(`${BACKEND_BASE}/snapshot/${tripId}`, { method: 'DELETE', headers: await authHeaders() });
+    // 必须检查状态码:否则 500/401 会被当成"删除成功",
+    // 导致本地删了、云端还在 → 下次同步复活
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`云端删除失败 HTTP ${res.status}`);
+    }
   }
   async list(): Promise<CloudTripRef[]> {
     const res = await fetch(`${BACKEND_BASE}/snapshot`, { headers: await authHeaders() });
@@ -250,4 +255,30 @@ export async function reconcile(): Promise<{ pushed: number; pulled: number; fai
 /** 删除某旅程的后端快照 */
 export async function removeBackup(tripId: string): Promise<void> {
   try { await STORAGE.remove(tripId); } catch { /* ignore */ }
+}
+
+/**
+ * 删除旅程:先删云端备份,成功后再删本地。
+ *
+ * 顺序很重要 —— 只删本地的话,下次 reconcile 会发现「云端有、本地无」
+ * 而把它重新拉回来(用户表现为"删了又出现")。
+ * 云端删除失败时【不删本地】,以免制造这种状态。
+ *
+ * @returns 云端是否删除成功
+ */
+export async function removeTripEverywhere(tripId: string): Promise<boolean> {  let cloudOk = true;
+  try {
+    await STORAGE.remove(tripId);
+  } catch (e) {
+    console.warn('[sync] 云端删除失败:', e);
+    cloudOk = false;
+  }
+  if (!cloudOk) return false;
+  try {
+    await db.deleteTrip(tripId);
+  } catch (e) {
+    console.warn('[sync] 本地删除失败:', e);
+    return false;
+  }
+  return true;
 }

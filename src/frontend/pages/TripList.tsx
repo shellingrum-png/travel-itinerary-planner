@@ -4,7 +4,7 @@ import { db } from '../services/db';
 import type { Trip } from '../types';
 import seedData from '../seed.json';
 import CreateWizard from '../components/CreateWizard';
-import { listBackedUpTrips, restoreTrip, reconcile } from '../services/sync';
+import { listBackedUpTrips, restoreTrip, reconcile, removeTripEverywhere } from '../services/sync';
 import { isAuthConfigured, signOut } from '../services/auth';
 import { C, btn, btnGhost, btnSmall } from '../components/ui';
 import { uuid } from '../utils/uuid';
@@ -57,8 +57,12 @@ export default function TripList() {
   };
 
   const remove = async (id: string) => {
-    if (!confirm('确定删除此旅程?(不会删除云端备份)')) return;
-    await db.deleteTrip(id);
+    if (!confirm('确定删除此旅程?\n(本地和云端备份都会删除,删除后不可恢复)')) return;
+    // 必须先删云端:只删本地的话,下次 reconcile 发现"云端有、本地无"会把它拉回来
+    const cloudOk = await removeTripEverywhere(id);
+    if (!cloudOk) {
+      alert('云端备份删除失败(可能网络问题),本次仅删除了本地副本。\n下次同步时它可能会重新出现,请稍后重试删除。');
+    }
     await load();
   };
 
