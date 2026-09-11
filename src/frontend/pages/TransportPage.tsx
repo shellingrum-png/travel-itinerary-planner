@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { db } from '../services/db';
 import { searchTransport, type TransportOption } from '../services/transport';
 import type { Transport, TransportModeType, TransportSegmentType, Trip } from '../types';
-import { C, btn, btnGhost, btnSmall, input } from '../components/ui';
+import { C, btn, btnGhost, btnSmall, card, input, PageHeader, EmptyState } from '../components/ui';
 
 const MODES: { value: TransportModeType; label: string }[] = [
   { value: 'flight', label: '飞机' },
@@ -145,15 +145,17 @@ export default function TransportPage() {
   };
 
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto', padding: 24, minHeight: '100vh' }}>
+    <div style={{ maxWidth: 640, margin: '0 auto', padding: 24, minHeight: '100vh' }}>
       <Link to={`/trip/${tripId}`} style={{ color: C.success, fontSize: 13, textDecoration: 'none' }}>&larr; 返回旅程</Link>
-      <h1 style={{ fontSize: 24, fontWeight: 700 }}>大交通管理</h1>
+      <PageHeader title="大交通管理" right={
+        !showForm ? (
+          <button onClick={() => { resetForm(); setShowForm(true); }} style={btn()}>+ 添加交通</button>
+        ) : undefined
+      } />
 
-      {!showForm ? (
-        <button onClick={() => { resetForm(); setShowForm(true); }} style={btn()}>+ 添加交通</button>
-      ) : (
+      {showForm && (
         <div style={{ padding: 16, border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 12, marginBottom: 16, background: 'rgba(255,255,255,0.02)' }}>
-          {error && <p style={{ color: C.danger, fontSize: 13 }}>{error}</p>}
+          {error && <p style={{ color: C.danger, fontSize: 13, marginTop: 0 }}>{error}</p>}
 
           <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
             <select value={form.segType} onChange={(e) => setForm({ ...form, segType: e.target.value as TransportSegmentType })} style={{ ...input, width: 'auto' }}>
@@ -171,7 +173,7 @@ export default function TransportPage() {
 
           {/* V6.2 真实班次查询 */}
           {(form.mode === 'flight' || form.mode === 'train') && (
-            <div style={{ marginBottom: 8, padding: 10, background: 'rgba(22,119,255,0.06)', borderRadius: 8 }}>
+            <div style={{ marginBottom: 8, padding: 10, background: 'rgba(22,119,255,0.06)', border: '1px solid rgba(22,119,255,0.15)', borderRadius: 8 }}>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input type="date" value={queryDate} onChange={(e) => setQueryDate(e.target.value)} style={{ ...input, flex: 1 }} />
                 <button onClick={handleSearch} disabled={searching} style={{ ...btnGhost, ...btnSmall, whiteSpace: 'nowrap' }}>{searching ? '查询中…' : '🔍 查询班次'}</button>
@@ -192,7 +194,7 @@ export default function TransportPage() {
 
           <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
             <input type="datetime-local" value={form.departAt} onChange={(e) => setForm({ ...form, departAt: e.target.value })} style={input} />
-            <span style={{ alignSelf: 'center' }}>→</span>
+            <span style={{ alignSelf: 'center', color: '#6a6a80' }}>→</span>
             <input type="datetime-local" value={form.arriveAt} onChange={(e) => setForm({ ...form, arriveAt: e.target.value })} style={input} />
           </div>
 
@@ -211,28 +213,28 @@ export default function TransportPage() {
       )}
 
       {transports.length === 0 ? (
-        <p style={{ color: '#9a9ab0' }}>暂无交通记录</p>
+        <EmptyState>暂无交通记录</EmptyState>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {transports.map((t) => (
-            <li key={t.id} style={{ padding: 14, border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, marginBottom: 8, background: 'rgba(255,255,255,0.02)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                <div>
-                  <div style={{ fontWeight: 'bold' }}>
+            <div key={t.id} style={card}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>
                     {MODES.find((m) => m.value === t.mode)?.label} {t.flightNo || t.trainNo || ''}
-                    {' '}<span style={{ fontSize: 12, color: '#888' }}>{SEG_TYPES.find((s) => s.value === t.segType)?.label}</span>
+                    {' '}<span style={{ fontSize: 12, color: '#6a6a80', fontWeight: 400 }}>{SEG_TYPES.find((s) => s.value === t.segType)?.label}</span>
                   </div>
-                  <div style={{ fontSize: 14, marginTop: 4 }}>{t.fromPlace} → {t.toPlace}</div>
-                  <div style={{ fontSize: 13, color: '#888', marginTop: 2 }}>{formatTime(t.departAt)} → {formatTime(t.arriveAt)}</div>
+                  <div style={{ fontSize: 13, marginTop: 4 }}>{t.fromPlace} → {t.toPlace}</div>
+                  <div style={{ fontSize: 12, color: '#9a9ab2', marginTop: 2 }}>{formatTime(t.departAt)} → {formatTime(t.arriveAt)}</div>
                 </div>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  <button onClick={() => handleEdit(t)} style={{ fontSize: 12 }}>编辑</button>
-                  <button onClick={() => handleDelete(t.id)} style={{ fontSize: 12, color: '#c00' }}>删除</button>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <button onClick={() => handleEdit(t)} style={{ ...btnGhost, ...btnSmall }}>编辑</button>
+                  <button onClick={() => handleDelete(t.id)} style={{ ...btnGhost, ...btnSmall, color: C.danger }}>删除</button>
                 </div>
               </div>
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );

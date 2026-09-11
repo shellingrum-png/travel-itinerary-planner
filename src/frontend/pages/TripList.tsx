@@ -2,17 +2,26 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../services/db';
 import type { Trip } from '../types';
-import seedData from '../seed.json';
 import CreateWizard from '../components/CreateWizard';
 import { listBackedUpTrips, restoreTrip, reconcile, removeTripEverywhere } from '../services/sync';
 import { isAuthConfigured, signOut } from '../services/auth';
-import { C, btn, btnGhost, btnSmall } from '../components/ui';
-import { uuid } from '../utils/uuid';
+import { C, btn, btnGhost, btnSmall, PageHeader, EmptyState } from '../components/ui';
+
+/** 更新时间格式:今天显示时刻,今年显示月日,更早显示年月日 */
+function fmtUpdatedAt(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (d.toDateString() === now.toDateString()) return `今天 ${hm}`;
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
 export default function TripList() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [showWizard, setShowWizard] = useState(false);
-  const [importing, setImporting] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const navigate = useNavigate();
 
@@ -66,90 +75,23 @@ export default function TripList() {
     await load();
   };
 
-  const importSeed = async () => {
-    setImporting(true);
-    try {
-      // 幂等导入:找到本地同名旅程复用其 id(避免每次导入生成新 id → 云端堆积同名多份)
-      const s = seedData as any;
-      const existing = await db.listTrips();
-      const sameTitle = existing.find((t) => t.title === s.trip.title);
-      const tripId = sameTitle ? sameTitle.id : uuid();
-
-      // 清除旧同名旅程的全部天数+排点(保留 id 与天数骨架可统一重建)
-      const oldDays = await db.listDays(tripId);
-      for (const d of oldDays) {
-        const items = await db.listItems(d.id);
-        for (const it of items) await db.removeItem(it.id);
-      }
-
-      // 若没有同名旅程,才新建天数骨架;有则沿用现有天数
-      if (!sameTitle) {
-        await db.createTrip({
-          title: s.trip.title,
-          destination: s.trip.destination,
-          startDate: s.trip.startDate,
-          endDate: s.trip.endDate,
-          companionCount: s.trip.companionCount,
-          currency: s.trip.currency,
-          totalBudget: s.trip.totalBudget,
-        }, tripId);
-      }
-      const days = await db.listDays(tripId);
-      for (const sd of s.days) {
-        const day = days.find((d) => d.daySeq === sd.daySeq);
-        if (!day) continue;
-        await db.updateItem(day.id, { note: sd.theme });
-
-        for (const lm of (sd.landmarks || [])) {
-          const poiId = uuid();
-          const name = typeof lm === 'string' ? lm : lm.name;
-          const lng = typeof lm === 'object' ? lm.lng : 0;
-          const lat = typeof lm === 'object' ? lm.lat : 0;
-          await db.upsertPoi({
-            id: poiId,
-            name,
-            lng,
-            lat,
-            category: 'poi',
-          });
-          await db.addItem({
-            dayId: day.id,
-            poiId,
-            itemType: 'poi',
-            transportMode: 'walk',
-            note: name,
-            visitMinutes: 90,
-          });
-        }
-      }
-      await load();
-    } finally {
-      setImporting(false);
-    }
-  };
-
   return (
     <div style={{ maxWidth: 600, margin: '0 auto', padding: 24 }}>
-      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 4 }}>我的旅程</h1>
-      <p style={{ color: '#9a9ab0', fontSize: 13, marginTop: 0, marginBottom: 20 }}>规划 · 优化 · 记账 · 云备份</p>
-
-      {isAuthConfigured() && (
-        <button
-          onClick={async () => { await signOut(); }}
-          style={{ ...btnGhost, ...btnSmall, float: 'right', marginTop: -40, color: '#ff6b6b' }}
-        >
-          退出登录
-        </button>
-      )}
+      <PageHeader
+        title="我的旅程"
+        subtitle="规划 · 优化 · 记账 · 云备份"
+        right={isAuthConfigured() && (
+          <button onClick={async () => { await signOut(); }} style={{ ...btnGhost, ...btnSmall, color: '#ff6b6b' }}>
+            退出登录
+          </button>
+        )}
+      />
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-        <button onClick={() => setShowWizard(!showWizard)} style={{ ...btn(C.success, '#001'), fontWeight: 700 }}>
+        <button onClick={() => setShowWizard(!showWizard)} style={{ ...btn(C.success, '#00251a'), fontWeight: 700 }}>
           {showWizard ? '取消' : '+ 新建旅程'}
         </button>
-        <button onClick={importSeed} disabled={importing} style={{ ...btn(), opacity: importing ? 0.5 : 1, ...btnSmall }}>
-          {importing ? '导入中…' : '导入青甘大环线'}
-        </button>
-        <button onClick={handleRestoreFromCloud} disabled={restoring} style={{ ...btnGhost, border: '1px solid #333', ...btnSmall }} title="换设备/浏览器后,从云端拉回旅程">
+        <button onClick={handleRestoreFromCloud} disabled={restoring} style={{ ...btnGhost, ...btnSmall }} title="换设备/浏览器后,从云端拉回旅程">
           {restoring ? '恢复中…' : '☁️ 从云端恢复'}
         </button>
       </div>
@@ -161,7 +103,7 @@ export default function TripList() {
           <li
             key={t.id}
             style={{
-              padding: 16,
+              padding: '15px 16px',
               border: '1px solid rgba(255,255,255,0.08)',
               borderRadius: 12,
               marginBottom: 10,
@@ -169,25 +111,29 @@ export default function TripList() {
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
+              gap: 12,
               background: 'rgba(255,255,255,0.03)',
-              transition: 'background 0.15s, transform 0.05s',
+              transition: 'background 0.15s, border-color 0.15s',
             }}
             onClick={() => navigate(`/trip/${t.id}`)}
-            onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.06)')}
-            onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.16)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
           >
-            <div>
+            <div style={{ minWidth: 0, flex: 1 }}>
               <strong style={{ fontSize: 15 }}>{t.title}</strong>
-              <div style={{ color: '#9a9ab0', fontSize: 13, marginTop: 4 }}>
+              <div style={{ color: '#9a9ab2', fontSize: 13, marginTop: 4 }}>
                 {t.destination} · {t.startDate} ~ {t.endDate} · {t.status}
+                {t.updatedAt && (
+                  <span style={{ color: '#6a6a80' }}> · 更新于 {fmtUpdatedAt(t.updatedAt)}</span>
+                )}
                 {t.cityNodes && t.cityNodes.length > 0 && (
-                  <div style={{ color: C.success, fontSize: 12, marginTop: 2, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <div style={{ color: C.success, fontSize: 12, marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {t.cityNodes.map((c, i) => <span key={i}>🏨 {c.city} {c.nights}晚</span>)}
                   </div>
                 )}
               </div>
             </div>
-            <button onClick={(e) => { e.stopPropagation(); remove(t.id); }} style={{ ...btnGhost, ...btnSmall, color: '#ff6b6b' }}>
+            <button onClick={(e) => { e.stopPropagation(); remove(t.id); }} style={{ ...btnGhost, ...btnSmall, color: '#ff6b6b', flexShrink: 0 }}>
               删除
             </button>
           </li>
@@ -195,7 +141,7 @@ export default function TripList() {
       </ul>
 
       {trips.length === 0 && !showWizard && (
-        <p style={{ color: '#aaa' }}>还没有旅程,点击上方按钮新建</p>
+        <EmptyState>还没有旅程,点击上方按钮新建</EmptyState>
       )}
     </div>
   );

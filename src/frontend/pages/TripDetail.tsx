@@ -13,8 +13,8 @@ import { getPoiCard } from '../services/llm';
 import { loadAMap } from '../services/amapLoader';
 import { optimizeItinerary, estimateDayCapacity, estimateReachablePois, dayWindowMin, findReturnTransport, findDepartTransport } from '../services/itineraryEngine';
 import type { ItineraryPoi, DayAnchor } from '../services/itineraryEngine';
-import TripPreview from '../components/TripPreview';
 import ItemEditModal, { type EditPatch } from '../components/ItemEditModal';
+import { C } from '../components/ui';
 import { modeIcon, fmtDT, dayTransports, isBigTransportMode } from '../utils/transportFormat';
 import { buildItemPatch, ticketAction } from '../utils/itemEdit';
 import type { Trip, ItineraryDay, ItineraryItem, Poi, PoiAiCard, Hotel, TransportMode, Transport, TransportModeType, TransportSegmentType } from '../types';
@@ -34,7 +34,6 @@ interface SearchResult {
 }
 
 type EditTab = 'scenic' | 'hotel' | 'transport';
-type ViewMode = 'editor' | 'viewer';
 
 export default function TripDetail() {
   const { id } = useParams<{ id: string }>();
@@ -43,8 +42,6 @@ export default function TripDetail() {
   const [days, setDays] = useState<ItineraryDay[]>([]);
   const [daySummaries, setDaySummaries] = useState<Array<{ day: ItineraryDay; items: (ItineraryItem & { poi?: Poi; aiCard?: PoiAiCard })[] }>>([]);
   const [spent, setSpent] = useState(0);
-  const [showMap, setShowMap] = useState(true);
-  const [mode, setMode] = useState<ViewMode>('editor');
   const online = useOnlineStatus();
   const [transports, setTransports] = useState<Transport[]>([]); // 大交通表
 
@@ -71,7 +68,6 @@ export default function TripDetail() {
   const [hotelLoading, setHotelLoading] = useState(false);
   const [selectedHotel, setSelectedHotel] = useState<SearchResult | null>(null);
   const [hotelPrice, setHotelPrice] = useState(''); // V6.2 关联记账:房价
-
   // 交通
   const [transportPrice, setTransportPrice] = useState(''); // V6.2 关联记账:票价
   const [fromResult, setFromResult] = useState<SearchResult | null>(null);
@@ -602,8 +598,25 @@ export default function TripDetail() {
   };
 
   /** 清洗景点名用于搜索:去括号/去噪音词 */
-  const cleanPoiName = (name: string): string => {
-    let n = name
+  /** 旅程涉及的城市列表(用于搜索联动快捷选择):cityNodes → POI 逆地理city → 目的地拆分,排除"青甘/环线"等总称 */
+  const tripCities: string[] = (() => {
+    const isUmbrella = (s: string) => /青甘|环线|大西北|西北/.test(s);
+    const out: string[] = [];
+    const push = (s?: string) => { const v = (s || '').trim(); if (v && !isUmbrella(v) && !out.includes(v)) out.push(v); };
+    if (trip?.cityNodes?.length) trip.cityNodes.forEach((c) => push(c.city));
+    for (const ds of daySummaries) for (const it of ds.items) push(it.poi?.city);
+    if (out.length === 0) (trip?.destination || '').split(/[、,，\s·]+/).forEach(push);
+    return out;
+  })();
+
+  /** 搜索城市:显式输入优先(尊重用户);留空则用行程首个具体城市兜底;总称不参与检索 */
+  const resolveSearchCity = (raw: string): string | undefined => {
+    const c = (raw || '').trim() || tripCities[0] || '';
+    if (!c || /青甘|环线|大西北|西北/.test(c)) return undefined;
+    return c;
+  };
+
+  const cleanPoiName = (name: string): string => {    let n = name
       .replace(/[（(].*?[)）]/g, '')      // 去括号内容
       .replace(/抵达|睡到自然醒|出发|看日落|拍照|吃瓜|骑骆驼/g, '')
       .replace(/^[\s·+]+|[\s·+]+$/g, '')
@@ -1193,8 +1206,7 @@ export default function TripDetail() {
     if (!scenicKeyword) return;
     setScenicLoading(true); setSelectedScenic(null); setScenicCard(null); clearTempMarker();
     try {
-      const city = /青甘|环线|大西北/.test(scenicCity || trip?.destination || '') ? '' : (scenicCity || trip?.destination || '');
-      setScenicResults(await searchPoiByJS(scenicKeyword, city));
+      setScenicResults(await searchPoiByJS(scenicKeyword, resolveSearchCity(scenicCity)));
     } catch (e: any) { alert('搜索失败: ' + e.message); }
     finally { setScenicLoading(false); }
   };
@@ -1202,7 +1214,7 @@ export default function TripDetail() {
   const handleSelectScenic = async (r: SearchResult) => {
     setSelectedScenic(r); setTempMarker(r.lng, r.lat);
     setScenicCardLoading(true);
-    try { setScenicCard(await getPoiCard({ id: r.id, name: r.name, category: 'poi' }, scenicCity || trip?.destination || '')); }
+    try { setScenicCard(await getPoiCard({ id: r.id, name: r.name, category: 'poi' }, resolveSearchCity(scenicCity) || '')); }
     catch { setScenicCard(null); }
     finally { setScenicCardLoading(false); }
   };
@@ -1234,8 +1246,7 @@ export default function TripDetail() {
     if (!hotelKeyword) return;
     setHotelLoading(true); setSelectedHotel(null); clearTempMarker();
     try {
-      const city = /青甘|环线|大西北/.test(hotelCity || trip?.destination || '') ? '' : (hotelCity || trip?.destination || '');
-      const results = await searchPoiByJS(hotelKeyword, city);
+      const results = await searchPoiByJS(hotelKeyword, resolveSearchCity(hotelCity));
       setHotelResults(results.filter((r) => r.type.includes('酒店') || r.type.includes('住宿') || r.type.includes('宾馆')));
     } catch (e: any) { alert('搜索失败: ' + e.message); }
     finally { setHotelLoading(false); }
@@ -1357,6 +1368,9 @@ export default function TripDetail() {
   const p: React.CSSProperties = { background: 'rgba(255,255,255,0.06)', borderRadius: 8, padding: 12, marginTop: 10 };
   const inp: React.CSSProperties = { background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, padding: '8px 10px', color: '#fff', fontSize: 13, width: '100%', outline: 'none' };
   const btn = (bg = '#1677ff'): React.CSSProperties => ({ background: bg, color: '#fff', border: 'none', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer' });
+  // 工具行:四个操作统一样式(button 与 link 视觉一致)
+  const toolBtn: React.CSSProperties = { flex: 1, padding: '7px 0', fontSize: 12, borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#c8c8d8', cursor: 'pointer', textAlign: 'center' };
+  const toolLink: React.CSSProperties = { ...toolBtn, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' };
   const tabBtn = (tab: EditTab): React.CSSProperties => ({
     flex: 1, padding: '8px 0', fontSize: 13, border: 'none', borderRadius: 6,
     cursor: 'pointer', background: activeTab === tab ? '#1677ff' : 'rgba(255,255,255,0.08)',
@@ -1364,28 +1378,6 @@ export default function TripDetail() {
   });
 
   if (!trip) return <p style={{ padding: 24 }}>加载中…</p>;
-
-  const toggleBtn = (m: ViewMode): React.CSSProperties => ({
-    padding: '8px 24px', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600,
-    background: mode === m ? (m === 'editor' ? '#1677ff' : '#06d6a0') : 'rgba(255,255,255,0.08)',
-    color: mode === m ? '#fff' : '#888',
-  });
-
-  // 预览模式:渲染 TripPreview(只读,极简)
-  if (mode === 'viewer') {
-    return (
-      <div style={{ height: '100vh', background: '#12121f', color: '#eee', fontFamily: '-apple-system, sans-serif', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 8, padding: '12px 0', background: '#1d1d30', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
-          <button style={toggleBtn('editor')} onClick={() => setMode('editor')}>✍️ 编辑规划</button>
-          <button style={toggleBtn('viewer')} onClick={() => setMode('viewer')}>📖 行程预览</button>
-          <Link to="/" style={{ marginLeft: 16, color: '#06d6a0', fontSize: 13, display: 'flex', alignItems: 'center' }}>返回列表</Link>
-        </div>
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          <TripPreview trip={trip} daySummaries={daySummaries} />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <>
@@ -1398,10 +1390,6 @@ export default function TripDetail() {
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <Link to="/" style={{ color: '#06d6a0', fontSize: 13, textDecoration: 'none' }}>← 返回列表</Link>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button style={toggleBtn('editor')} onClick={() => setMode('editor')}>✍️ 编辑</button>
-            <button style={toggleBtn('viewer')} onClick={() => setMode('viewer')}>📖 预览</button>
-          </div>
         </div>
         <div style={{ padding: '14px 16px', borderRadius: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', marginBottom: 12 }}>
           <h1 style={{ fontSize: 20, margin: 0, color: '#ffd166', fontWeight: 700 }}>{trip.title}</h1>
@@ -1412,36 +1400,27 @@ export default function TripDetail() {
         </div>
         {!online && <div style={{ background: 'rgba(255,209,102,0.12)', padding: 6, borderRadius: 6, margin: '8px 0', fontSize: 12, color: '#ffd166' }}>当前为离线/弱网模式</div>}
 
-        {trip.totalBudget ? (
-          <div style={{ marginBottom: 10, display: 'flex', gap: 12, fontSize: 13 }}>
-            <span>已花 ¥{spent.toFixed(0)}</span>
-            <span style={{ color: spent > trip.totalBudget ? '#c00' : '#2e7d32' }}>剩余 ¥{Math.max(0, trip.totalBudget - spent).toFixed(0)}</span>
-            <Link to={`/trip/${trip.id}/bookkeeping`} style={{ color: '#1677ff', marginLeft: 'auto' }}>记账</Link>
-            <Link to={`/trip/${trip.id}/overview`} style={{ color: '#06d6a0' }}>📊 概览</Link>
-          </div>
-        ) : (
-          // 未设预算时仍保留花费与入口(此前整块隐藏,导致复制出的行程"看不到记账")
-          <div style={{ marginBottom: 10, display: 'flex', gap: 12, fontSize: 13, alignItems: 'center' }}>
-            <span style={{ color: spent > 0 ? '#eee' : '#9a9ab0' }}>已花 ¥{spent.toFixed(0)}</span>
+        {/* 花费概览(纯数据,入口在下方工具行) */}
+        <div style={{ marginBottom: 10, display: 'flex', gap: 10, fontSize: 13, alignItems: 'center' }}>
+          <span>已花 ¥{spent.toFixed(0)}</span>
+          {trip.totalBudget ? (
+            <span style={{ color: spent > trip.totalBudget ? C.danger : C.success }}>
+              剩余 ¥{Math.max(0, trip.totalBudget - spent).toFixed(0)}
+            </span>
+          ) : (
             <span style={{ color: '#6b7a8f', fontSize: 12 }}>未设预算</span>
-            <Link to={`/trip/${trip.id}/bookkeeping`} style={{ color: '#1677ff', marginLeft: 'auto' }}>记账</Link>
-            <Link to={`/trip/${trip.id}/overview`} style={{ color: '#06d6a0' }}>📊 概览</Link>
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-          <button onClick={handleAdjustDates} style={{ ...btn('rgba(255,255,255,0.1)'), flex: 1, fontSize: 12 }}>调整日期</button>
-          <button onClick={handleGlobalOptimize} style={{ ...btn('#06d6a0'), flex: 2, fontSize: 12 }} title="跨天防折返优化,全程最短">
-            ♻️ 全局顺路优化
-          </button>
-          <button onClick={() => setShowMap(!showMap)} style={{ ...btn(showMap ? 'rgba(255,255,255,0.1)' : '#1677ff'), fontSize: 12 }}>
-            {showMap ? '收起地图' : '展开地图'}
-          </button>
+          )}
         </div>
 
-        <div style={{ fontSize: 13, color: '#06d6a0', fontWeight: 600, marginBottom: 6 }}>点击某天查看行程 · 拖拽景点可排序/跨天</div>
+        {/* 工具行:调整/优化/记账/概览 统一样式平铺 */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+          <button onClick={handleAdjustDates} style={toolBtn}>调整日期</button>
+          <button onClick={handleGlobalOptimize} style={toolBtn} title="跨天防折返优化,全程最短">顺路优化</button>
+          <Link to={`/trip/${trip.id}/bookkeeping`} style={toolLink}>记账</Link>
+          <Link to={`/trip/${trip.id}/overview`} style={toolLink}>概览</Link>
+        </div>
 
-        <div style={{ fontSize: 13, color: '#06d6a0', fontWeight: 600, marginBottom: 6 }}>点击某天查看行程</div>
+        <div style={{ fontSize: 12, color: '#6a6a80', marginBottom: 8 }}>点击某天查看行程 · 拖拽景点可排序或跨天</div>
 
         {days.map((d, i) => {
           const ds = daySummaries.find((s) => s.day.id === d.id);
@@ -1664,11 +1643,27 @@ export default function TripDetail() {
                   {/* 景点 Tab */}
                   {activeTab === 'scenic' && (
                     <div>
-                      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                      <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
                         <input placeholder="城市" value={scenicCity} onChange={(e) => setScenicCity(e.target.value)} style={{ ...inp, flex: 1 }} />
                         <input placeholder="搜索景点" value={scenicKeyword} onChange={(e) => setScenicKeyword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleScenicSearch()} style={{ ...inp, flex: 2 }} />
                         <button style={btn()} onClick={handleScenicSearch} disabled={scenicLoading}>{scenicLoading ? '…' : '搜索'}</button>
                       </div>
+                      {tripCities.length > 0 && (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                          {tripCities.map((c) => (
+                            <button
+                              key={c}
+                              onClick={() => setScenicCity(c)}
+                              style={{
+                                fontSize: 11, padding: '2px 10px', borderRadius: 999, cursor: 'pointer',
+                                border: scenicCity === c ? '1px solid #1677ff' : '1px solid rgba(255,255,255,0.14)',
+                                background: scenicCity === c ? 'rgba(22,119,255,0.2)' : 'rgba(255,255,255,0.05)',
+                                color: scenicCity === c ? '#7db4ff' : '#9a9ab2',
+                              }}
+                            >{c}</button>
+                          ))}
+                        </div>
+                      )}
                       {scenicResults.length > 0 && !selectedScenic && (
                         <div style={{ maxHeight: 160, overflow: 'auto' }}>
                           {scenicResults.map((r) => (
@@ -1700,11 +1695,27 @@ export default function TripDetail() {
                   {/* 酒店 Tab */}
                   {activeTab === 'hotel' && (
                     <div>
-                      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                      <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
                         <input placeholder="城市" value={hotelCity} onChange={(e) => setHotelCity(e.target.value)} style={{ ...inp, flex: 1 }} />
                         <input placeholder="搜索酒店" value={hotelKeyword} onChange={(e) => setHotelKeyword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleHotelSearch()} style={{ ...inp, flex: 2 }} />
                         <button style={btn()} onClick={handleHotelSearch} disabled={hotelLoading}>{hotelLoading ? '…' : '搜索'}</button>
                       </div>
+                      {tripCities.length > 0 && (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                          {tripCities.map((c) => (
+                            <button
+                              key={c}
+                              onClick={() => setHotelCity(c)}
+                              style={{
+                                fontSize: 11, padding: '2px 10px', borderRadius: 999, cursor: 'pointer',
+                                border: hotelCity === c ? '1px solid #1677ff' : '1px solid rgba(255,255,255,0.14)',
+                                background: hotelCity === c ? 'rgba(22,119,255,0.2)' : 'rgba(255,255,255,0.05)',
+                                color: hotelCity === c ? '#7db4ff' : '#9a9ab2',
+                              }}
+                            >{c}</button>
+                          ))}
+                        </div>
+                      )}
                       {hotelResults.length > 0 && !selectedHotel && (
                         <div style={{ maxHeight: 160, overflow: 'auto' }}>
                           {hotelResults.map((r) => (
@@ -1800,34 +1811,25 @@ export default function TripDetail() {
 
       {/* 右侧地图 */}
       <div style={{ flex: 1, height: '100vh', position: 'relative' }}>
-        {showMap ? (
-          <>
-            {mapError ? (
-              <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#c00' }}>{mapError}</div>
-            ) : (
-              <div ref={mapContainerRef} style={{ height: '100%' }} />
-            )}
-            {/* 空态遮罩层:旅程加载完成 且 没有任何带坐标 POI 时提示 */}
-            {(() => {
-              const tp = daySummaries.reduce((n, ds) => n + ds.items.filter(it => it.poi && it.poi.lng !== 0 && it.poi.lat !== 0).length, 0);
-              if (tp > 0) return null; // 有坐标 → 不提示
-              return (
-                <div style={{ position: 'absolute', inset: 0, background: 'rgba(26,26,46,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 100, gap: 8 }}>
-                  <div style={{ fontSize: 32, marginBottom: 8 }}>🗺️</div>
-                  <div style={{ fontSize: 16, fontWeight: 600, color: '#ffd166' }}>暂无景点坐标</div>
-                  <div style={{ fontSize: 13, color: '#aaa', marginTop: 4, textAlign: 'center' }}>
-                    {trip ? (
-                      <>先在左侧「+添加」搜索景点<br/>或前往旅程列表<strong><u onClick={() => navigate('/')} style={{cursor:'pointer'}}>点击这里</u></strong>导入青甘大环线示例</>
-                    ) : '正在加载…'}
-                  </div>
-                </div>
-              );
-            })()}
-          </>
+        {mapError ? (
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ff6b6b' }}>{mapError}</div>
         ) : (
-          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555' }}>
-          </div>
+          <div ref={mapContainerRef} style={{ height: '100%' }} />
         )}
+        {/* 空态遮罩层:旅程加载完成 且 没有任何带坐标 POI 时提示 */}
+        {(() => {
+          const tp = daySummaries.reduce((n, ds) => n + ds.items.filter(it => it.poi && it.poi.lng !== 0 && it.poi.lat !== 0).length, 0);
+          if (tp > 0) return null; // 有坐标 → 不提示
+          return (
+            <div style={{ position: 'absolute', inset: 0, background: 'rgba(26,26,46,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 100, gap: 8 }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🗺️</div>
+              <div style={{ fontSize: 16, fontWeight: 600, color: '#ffd166' }}>暂无景点坐标</div>
+              <div style={{ fontSize: 13, color: '#aaa', marginTop: 4, textAlign: 'center' }}>
+                {trip ? '在左侧某天「+ 添加」里搜索景点,即可在地图上看路线' : '正在加载…'}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* 全局优化:起点终点选择遮罩 */}

@@ -4,6 +4,7 @@ import MapView from '../components/MapView';
 import type { MarkerDef } from '../components/MapView';
 import { useStagedStore } from '../stores/stagedStore';
 import { getAccessToken } from '../services/auth';
+import { C, btn, btnGhost, btnSmall, card, input, PageHeader, EmptyState } from '../components/ui';
 
 const WEB_KEY = import.meta.env.VITE_AMAP_WEB_KEY || '9a5f6f729b7e6e7577d18d31a5d52e97';
 // 生产设 VITE_AMAP_PROXY=proxy → 同源代理 /api/amap/place(隐藏 Web 服务 key)
@@ -95,29 +96,29 @@ export default function PoiSearch() {
 
   return (
     <div style={{ maxWidth: 800, margin: '0 auto', padding: 24 }}>
-      <Link to={`/trip/${tripId}`}>&larr; 返回旅程</Link>
-      <h1>景点检索</h1>
+      <Link to={`/trip/${tripId}`} style={{ color: C.success, fontSize: 13 }}>&larr; 返回旅程</Link>
+      <PageHeader title="景点检索" subtitle="搜索地点并加入暂存箱" />
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
         <input
           placeholder="城市"
           value={city}
           onChange={(e) => setCity(e.target.value)}
-          style={{ width: 120 }}
+          style={{ ...input, width: 120 }}
         />
         <input
           placeholder="关键词"
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && search()}
-          style={{ flex: 1 }}
+          style={{ ...input, flex: 1 }}
         />
-        <button onClick={search} disabled={loading || !city || !keyword}>
+        <button onClick={search} disabled={loading || !city || !keyword} style={{ ...btn(), opacity: loading || !city || !keyword ? 0.5 : 1 }}>
           {loading ? '搜索中…' : '搜索'}
         </button>
       </div>
 
-      {error && <p style={{ color: '#c00' }}>{error}</p>}
+      {error && <p style={{ color: C.danger, fontSize: 13 }}>{error}</p>}
 
       <div style={{ display: 'flex', gap: 16 }}>
         {/* 结果列表 */}
@@ -127,20 +128,21 @@ export default function PoiSearch() {
               key={r.id}
               onClick={() => setSelected(r)}
               style={{
-                padding: 8,
-                marginBottom: 4,
-                border: selected?.id === r.id ? '2px solid #1677ff' : '1px solid #eee',
-                borderRadius: 6,
+                padding: 10,
+                marginBottom: 6,
+                border: selected?.id === r.id ? `1px solid ${C.primary}` : '1px solid rgba(255,255,255,0.1)',
+                background: selected?.id === r.id ? 'rgba(22,119,255,0.1)' : 'rgba(255,255,255,0.03)',
+                borderRadius: 8,
                 cursor: 'pointer',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <strong>{r.name}</strong>
-                <div style={{ display: 'flex', gap: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <strong style={{ fontSize: 13 }}>{r.name}</strong>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                   <Link
                     to={`/trip/${tripId}/poi?poiId=${r.id}&name=${encodeURIComponent(r.name)}&lng=${r.lng}&lat=${r.lat}&addr=${encodeURIComponent(r.address)}&city=${encodeURIComponent(city)}`}
                     onClick={(e) => e.stopPropagation()}
-                    style={{ fontSize: 12 }}
+                    style={{ fontSize: 12, color: C.info }}
                   >
                     详情
                   </Link>
@@ -150,17 +152,17 @@ export default function PoiSearch() {
                       addToStagedLocal(r);
                     }}
                     disabled={staged.some((s) => s.id === r.id)}
-                    style={{ fontSize: 12 }}
+                    style={{ ...btnGhost, ...btnSmall, opacity: staged.some((s) => s.id === r.id) ? 0.5 : 1 }}
                   >
                     {staged.some((s) => s.id === r.id) ? '已加入' : '+ 暂存'}
                   </button>
                 </div>
               </div>
-              <div style={{ color: '#888', fontSize: 13 }}>{r.address}</div>
+              <div style={{ color: '#6a6a80', fontSize: 12, marginTop: 2 }}>{r.address}</div>
             </div>
           ))}
           {results.length === 0 && !loading && keyword && (
-            <p style={{ color: '#aaa' }}>暂无结果,换个关键词试试</p>
+            <EmptyState>暂无结果,换个关键词试试</EmptyState>
           )}
         </div>
 
@@ -180,18 +182,19 @@ export default function PoiSearch() {
 
       {/* 暂存箱 */}
       {staged.length > 0 && (
-        <div style={{ marginTop: 20, padding: 12, border: '1px solid #ffc107', borderRadius: 8, background: '#fffde7' }}>
-          <h3>暂存箱 ({staged.length})</h3>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ marginTop: 20, padding: 12, border: '1px solid rgba(255,209,102,0.25)', borderRadius: 10, background: 'rgba(255,209,102,0.08)' }}>
+          <h3 style={{ margin: 0, fontSize: 14, color: C.warning }}>暂存箱 ({staged.length})</h3>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
             {staged.map((s) => (
               <span
                 key={s.id}
                 style={{
-                  padding: '4px 8px',
-                  border: '1px solid #ddd',
-                  borderRadius: 12,
+                  padding: '4px 12px',
+                  border: '1px solid rgba(255,255,255,0.16)',
+                  borderRadius: 999,
                   fontSize: 13,
                   cursor: 'pointer',
+                  background: 'rgba(255,255,255,0.06)',
                 }}
                 onClick={() => removeFromStagedLocal(s)}
                 title="点击移除"

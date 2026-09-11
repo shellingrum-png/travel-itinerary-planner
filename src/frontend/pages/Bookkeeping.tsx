@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { db } from '../services/db';
 import type { Expense, ExpenseCategory, Trip } from '../types';
-import { C, btn, btnGhost, btnSmall, card, input } from '../components/ui';
+import { C, btn, btnGhost, btnSmall, card, input, PageHeader, EmptyState } from '../components/ui';
 
 const CATEGORIES: { value: ExpenseCategory; label: string }[] = [
   { value: 'transport', label: '大交通' },
@@ -106,9 +106,9 @@ export default function Bookkeeping() {
   const splits = splitByPayer();
 
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto', padding: 24, minHeight: '100vh' }}>
+    <div style={{ maxWidth: 640, margin: '0 auto', padding: 24, minHeight: '100vh' }}>
       <Link to={`/trip/${tripId}`} style={{ color: '#06d6a0', fontSize: 13, textDecoration: 'none' }}>&larr; 返回旅程</Link>
-      <h1 style={{ fontSize: 24, fontWeight: 700 }}>记账</h1>
+      <PageHeader title="记账" />
 
       {/* 预算条 */}
       {totalBudget > 0 && (
@@ -151,26 +151,26 @@ export default function Bookkeeping() {
       {/* 消费列表 */}
       <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>消费记录</h2>
       {expenses.length === 0 ? (
-        <p style={{ color: '#9a9ab0' }}>暂无消费记录</p>
+        <EmptyState>暂无消费记录</EmptyState>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {expenses.map((e) => (
-            <li key={e.id} style={{ padding: 12, borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, borderRadius: 8, background: 'rgba(255,255,255,0.02)' }}>
+            <div key={e.id} style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: 10, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
               <div>
                 <div>
                   <strong style={{ fontSize: 15 }}>¥{e.amount.toFixed(2)}</strong>
-                  {' '}<span style={{ fontSize: 13 }}>{CATEGORIES.find((c) => c.value === e.category)?.label ?? e.category}</span>
+                  {' '}<span style={{ fontSize: 13, color: '#9a9ab2' }}>{CATEGORIES.find((c) => c.value === e.category)?.label ?? e.category}</span>
                 </div>
-                <div style={{ color: '#9a9ab0', fontSize: 13, marginTop: 2 }}>
+                <div style={{ color: '#6a6a80', fontSize: 12, marginTop: 2 }}>
                   {e.date}{e.note ? ` · ${e.note}` : ''}{e.paidBy ? ` · ${e.paidBy}付` : ''}
                 </div>
               </div>
-              <button onClick={() => handleDelete(e.id)} style={{ color: C.danger, border: 'none', background: 'none', cursor: 'pointer', fontSize: 13 }}>
+              <button onClick={() => handleDelete(e.id)} style={{ ...btnGhost, ...btnSmall, color: C.danger }}>
                 删除
               </button>
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
 
       {/* 添加消费 */}

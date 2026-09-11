@@ -1,15 +1,16 @@
-/* ── 全局暗色主题基础样式 ── */
+/* ── 全局暗色主题基础样式 v0.8 ── */
 :root {
-  /* 色板(语义化,设计token) */
-  --c-bg: #12121f;
-  --c-bg-panel: #1d1d30;
-  --c-bg-card: rgba(255, 255, 255, 0.04);
-  --c-bg-card-hover: rgba(255, 255, 255, 0.08);
-  --c-border: rgba(255, 255, 255, 0.1);
+  /* 色板(语义化,设计 token) */
+  --c-bg: #0f1020;
+  --c-bg-panel: #171830;
+  --c-bg-elevated: #1c1e38;
+  --c-bg-card: rgba(255, 255, 255, 0.045);
+  --c-bg-card-hover: rgba(255, 255, 255, 0.075);
+  --c-border: rgba(255, 255, 255, 0.09);
   --c-border-strong: rgba(255, 255, 255, 0.16);
-  --c-text: #e8e8f0;
-  --c-text-sub: #9a9ab0;
-  --c-text-muted: #6b6b82;
+  --c-text: #e9e9f2;
+  --c-text-sub: #9a9ab2;
+  --c-text-muted: #6a6a80;
 
   --c-primary: #1677ff;
   --c-primary-hover: #3d8bff;
@@ -17,18 +18,33 @@
   --c-warning: #ffd166;
   --c-danger: #ff6b6b;
   --c-info: #7eb8e0;
+  --c-accent: #b8a0e0;
 
-  /* 间距 */
+  /* 间距 scale(4 的倍数) */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
 
   /* 圆角 */
   --rd-sm: 6px;
-  --rd-md: 8px;
-  --rd-lg: 12px;
+  --rd-md: 10px;
+  --rd-lg: 14px;
+
+  /* 字号 scale */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-md: 15px;
+  --fs-lg: 18px;
+  --fs-xl: 22px;
+
+  /* 阴影 */
+  --sh-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --sh-md: 0 4px 16px rgba(0, 0, 0, 0.35);
 
   /* 字体 */
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
@@ -51,6 +67,35 @@ body,
   text-rendering: optimizeLegibility;
 }
 
+/* ── 全局表单控件暗色基线(修复各页白底输入框) ── */
+input,
+select,
+textarea {
+  font-family: inherit;
+  color: var(--c-text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--rd-sm);
+  padding: 7px 10px;
+  font-size: var(--fs-base);
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--c-text-muted);
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--c-primary);
+  background: rgba(255, 255, 255, 0.09);
+}
+input[type='date'],
+input[type='time'] {
+  color-scheme: dark;
+}
+
 /* 滚动条美化 */
 ::-webkit-scrollbar {
   width: 8px;
@@ -67,14 +112,11 @@ body,
   background: rgba(255, 255, 255, 0.22);
 }
 
-/* 输入框/按钮通用光感 */
-input,
-select,
-textarea {
-  font-family: inherit;
-  color: inherit;
+/* 链接默认无下划线,颜色跟随语义 */
+a {
+  color: var(--c-primary);
+  text-decoration: none;
 }
-input::placeholder,
-textarea::placeholder {
-  color: var(--c-text-muted);
+a:hover {
+  text-decoration: underline;
 }

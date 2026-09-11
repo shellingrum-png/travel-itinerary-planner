@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { db } from '../services/db';
 import { useStagedStore } from '../stores/stagedStore';
+import { C, btn, btnGhost, btnSmall, card, PageHeader, EmptyState } from '../components/ui';
 import type { ItineraryDay } from '../types';
 
 export default function StagedPage() {
@@ -40,60 +41,52 @@ export default function StagedPage() {
   };
 
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto', padding: 24 }}>
-      <Link to={`/trip/${tripId}`}>&larr; 返回旅程</Link>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>暂存箱</h1>
-        {staged.length > 0 && (
-          <button onClick={() => { if (confirm('确定清空暂存箱?')) clearStaged(); }} style={{ fontSize: 12, color: '#c00' }}>
+    <div style={{ maxWidth: 640, margin: '0 auto', padding: 24 }}>
+      <Link to={`/trip/${tripId}`} style={{ color: C.success, fontSize: 13 }}>&larr; 返回旅程</Link>
+      <PageHeader title="暂存箱" right={
+        staged.length > 0 ? (
+          <button onClick={() => { if (confirm('确定清空暂存箱?')) clearStaged(); }} style={{ ...btnGhost, ...btnSmall, color: C.danger }}>
             清空全部
           </button>
-        )}
-      </div>
+        ) : undefined
+      } />
 
       {staged.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 40 }}>
-          <p style={{ color: '#aaa', marginBottom: 16 }}>暂存箱为空,去搜索景点添加吧</p>
-          <Link to={`/trip/${tripId}/search`} style={{ color: '#1677ff' }}>去搜索景点</Link>
-        </div>
+        <EmptyState>
+          <div style={{ marginBottom: 12 }}>暂存箱为空,去搜索景点添加吧</div>
+          <Link to={`/trip/${tripId}/search`} style={{ color: C.primary }}>去搜索景点</Link>
+        </EmptyState>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {staged.map((s) => (
-            <li key={s.id} style={{ padding: 12, border: '1px solid #eee', borderRadius: 8, marginBottom: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <strong>{s.name}</strong>
-                  {s.address && <div style={{ fontSize: 13, color: '#888' }}>{s.address}</div>}
-                  <div style={{ fontSize: 12, color: '#aaa' }}>坐标: {s.lng.toFixed(4)}, {s.lat.toFixed(4)}</div>
+            <div key={s.id} style={card}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                <div style={{ minWidth: 0 }}>
+                  <strong style={{ fontSize: 14 }}>{s.name}</strong>
+                  {s.address && <div style={{ fontSize: 12, color: '#6a6a80', marginTop: 2 }}>{s.address}</div>}
+                  <div style={{ fontSize: 11, color: '#5a5a70', marginTop: 2 }}>坐标: {s.lng.toFixed(4)}, {s.lat.toFixed(4)}</div>
                 </div>
-                <button onClick={() => removeFromStaged(s.id)} style={{ color: '#c00', border: 'none', background: 'none', cursor: 'pointer' }}>
+                <button onClick={() => removeFromStaged(s.id)} style={{ ...btnGhost, ...btnSmall, color: C.danger, flexShrink: 0 }}>
                   移除
                 </button>
               </div>
               {dayForItem(s.id) ? (
-                <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {days.map((d) => (
-                    <button
-                      key={d.id}
-                      onClick={() => handleAddToDay(s, d.id)}
-                      style={{ padding: '4px 10px', fontSize: 12, background: '#1677ff', color: '#fff', border: 'none', borderRadius: 4 }}
-                    >
+                    <button key={d.id} onClick={() => handleAddToDay(s, d.id)} style={{ ...btn(), ...btnSmall }}>
                       Day {d.daySeq}
                     </button>
                   ))}
-                  <button onClick={() => setAddingDay(null)} style={{ padding: '4px 10px', fontSize: 12 }}>取消</button>
+                  <button onClick={() => setAddingDay(null)} style={{ ...btnGhost, ...btnSmall }}>取消</button>
                 </div>
               ) : (
-                <button
-                  onClick={() => setAddingDay(s.id)}
-                  style={{ marginTop: 8, fontSize: 12, background: '#f0f0f0', border: '1px solid #ddd', borderRadius: 4, padding: '4px 10px' }}
-                >
+                <button onClick={() => setAddingDay(s.id)} style={{ ...btnGhost, ...btnSmall, marginTop: 10 }}>
                   + 添加到行程
                 </button>
               )}
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );

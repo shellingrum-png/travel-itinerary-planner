@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useDayStore } from '../stores/dayStore';
 import { useOptimize } from './useOptimize';
 import { addMinutes } from '../utils/time';
+import { C, btn, btnGhost } from '../components/ui';
 import type { ItineraryItem } from '../types';
 
 export default function OptimizePage() {
@@ -58,20 +59,20 @@ export default function OptimizePage() {
   };
 
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto', padding: 24 }}>
-      <Link to={`/trip/${id}/day/${n}`}>&larr; 返回时间轴</Link>
-      <h1>路线优化 · Day {n}</h1>
+    <div style={{ maxWidth: 640, margin: '0 auto', padding: 24 }}>
+      <Link to={`/trip/${id}/day/${n}`} style={{ color: C.success, fontSize: 13 }}>&larr; 返回时间轴</Link>
+      <h1 style={{ fontSize: 22 }}>路线优化 · Day {n}</h1>
 
       {sorted.length < 2 ? (
-        <p style={{ color: '#aaa' }}>景点数量不足,无法优化(至少需要 2 个景点)</p>
+        <p style={{ color: '#9a9ab2' }}>景点数量不足,无法优化(至少需要 2 个景点)</p>
       ) : (
         <>
           {/* 当前顺序 */}
-          <h2>当前顺序</h2>
-          <ol style={{ paddingLeft: 20 }}>
+          <h2 style={{ fontSize: 16 }}>当前顺序</h2>
+          <ol style={{ paddingLeft: 20, color: '#c8c8d8' }}>
             {sorted.map((it, i) => (
               <li key={it.id} style={{ marginBottom: 6 }}>
-                <span style={{ color: '#888', fontSize: 12 }}>{displayTimes[i]?.arrive}</span>
+                <span style={{ color: '#6a6a80', fontSize: 12 }}>{displayTimes[i]?.arrive}</span>
                 {' '}{it.note ?? it.itemType}
                 {it.visitMinutes != null ? ` · ${it.visitMinutes}min` : ''}
               </li>
@@ -83,32 +84,32 @@ export default function OptimizePage() {
               <button
                 onClick={() => dayId && runOptimize(dayId)}
                 disabled={loading}
-                style={{ padding: '8px 20px', fontSize: 15, background: '#1677ff', color: '#fff', border: 'none', borderRadius: 6 }}
+                style={{ ...btn(C.success, '#00251a'), fontSize: 15, fontWeight: 600 }}
               >
-                {loading ? '计算最优路线中…' : '一键顺路优化'}
+                {loading ? '计算最优路线中…' : '♻️ 一键顺路优化'}
               </button>
-              {error && <p style={{ color: '#c00', marginTop: 8 }}>{error}</p>}
+              {error && <p style={{ color: C.danger, marginTop: 8 }}>{error}</p>}
               {canUndo && (
-                <button onClick={handleUndo} style={{ marginLeft: 12, padding: '8px 20px', fontSize: 15, color: '#c00' }}>
+                <button onClick={handleUndo} style={{ ...btnGhost, marginLeft: 12 }}>
                   撤销优化
                 </button>
               )}
             </div>
           ) : (
             <div style={{ marginTop: 16 }}>
-              <div style={{ padding: 12, background: '#e6f7e6', borderRadius: 8, marginBottom: 16 }}>
-                <span style={{ fontWeight: 'bold', color: '#2e7d32', fontSize: 16 }}>
+              <div style={{ padding: 12, background: 'rgba(6,214,160,0.1)', border: '1px solid rgba(6,214,160,0.25)', borderRadius: 8, marginBottom: 16 }}>
+                <span style={{ fontWeight: 600, color: C.success, fontSize: 16 }}>
                   预计节省 {preview.savedMinutes} 分钟
                 </span>
               </div>
 
-              <h2>优化后顺序</h2>
+              <h2 style={{ fontSize: 16 }}>优化后顺序</h2>
               <ol style={{ paddingLeft: 20 }}>
                 {preview.newOrder.map((origIdx, newIdx) => {
                   const it = sorted[origIdx];
                   if (!it) return null;
                   return (
-                    <li key={it.id} style={{ marginBottom: 6, color: '#1677ff' }}>
+                    <li key={it.id} style={{ marginBottom: 6, color: C.info }}>
                       {it.note ?? it.itemType}
                       {it.visitMinutes != null ? ` · ${it.visitMinutes}min` : ''}
                     </li>
@@ -117,12 +118,8 @@ export default function OptimizePage() {
               </ol>
 
               <div style={{ marginTop: 20, display: 'flex', gap: 12 }}>
-                <button onClick={handleApply} style={{ padding: '8px 20px', fontSize: 15, background: '#1677ff', color: '#fff', border: 'none', borderRadius: 6 }}>
-                  确认新顺序
-                </button>
-                <button onClick={handleCancelOpt} style={{ padding: '8px 20px', fontSize: 15 }}>
-                  取消
-                </button>
+                <button onClick={handleApply} style={btn()}>确认新顺序</button>
+                <button onClick={handleCancelOpt} style={btnGhost}>取消</button>
               </div>
             </div>
           )}

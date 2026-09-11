@@ -78,12 +78,12 @@ export default function MapView({ center, markers, onMarkerClick, style, classNa
   return (
     <div style={{ position: 'relative', ...style }} className={className}>
       {loading && (
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f5f5f5', zIndex: 1 }}>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#171830', color: '#9a9ab2', zIndex: 1 }}>
           地图加载中…
         </div>
       )}
       {error && (
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f5f5f5', zIndex: 1, color: '#c00' }}>
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#171830', zIndex: 1, color: '#ff6b6b' }}>
           {error}
         </div>
       )}
