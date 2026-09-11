@@ -7,6 +7,7 @@ import {
   computeAllSegments, fmtSegment, MODE_META,
   type SegPoint, type SegmentInfo,
 } from '../utils/segments';
+import { remapExpenses, remapTransports } from '../utils/tripCopy';
 import { getDuration, searchPoiByJS, reverseGeocode, getDrivingPath, resolveTransportHubCoord } from '../services/amap';
 import { getPoiCard } from '../services/llm';
 import { loadAMap } from '../services/amapLoader';
@@ -954,6 +955,10 @@ export default function TripDetail() {
       // 2. 遍历当前所有天的所有景点+酒店,按优化后的daySeq写入
       let copiedItems = 0;
       const usedDaySeqs = new Set<number>();
+      // 复制时的 id 映射(供记账/大交通重定向引用)
+      const itemIdMap = new Map<string, string>();
+      const hotelIdMap = new Map<string, string>();
+      const dayIdMap = new Map<string, string>();
       for (const ds of daySummaries) {
         for (const it of ds.items) {
           // 计算目标daySeq:被移动的项用moveMap,其余保持原daySeq
@@ -961,13 +966,14 @@ export default function TripDetail() {
           usedDaySeqs.add(targetDaySeq);
           const targetDay = newDays.find((nd) => nd.daySeq === targetDaySeq);
           if (!targetDay) continue;
+          dayIdMap.set(ds.day.id, targetDay.id);
 
           // 写入POI
           const poiId = it.poiId || uuid();
           if (it.poi) await db.upsertPoi({ ...it.poi, id: poiId });
 
           // 写入行程项
-          await db.addItem({
+          const newItem = await db.addItem({
             dayId: targetDay.id,
             poiId,
             itemType: it.itemType,
@@ -975,11 +981,12 @@ export default function TripDetail() {
             note: it.note,
             visitMinutes: it.visitMinutes,
           });
+          itemIdMap.set(it.id, newItem.id);
           copiedItems++;
 
           // 如果是酒店,同时写入 hotels 表
           if (it.itemType === 'hotel' && it.poi?.lng && it.poi?.lat) {
-            await db.addHotel({
+            const newHotel = await db.addHotel({
               tripId: newTrip.id,
               name: it.poi.name,
               address: it.poi.address,
@@ -989,6 +996,7 @@ export default function TripDetail() {
               checkOut: targetDay.date,
               poiId,
             });
+            hotelIdMap.set(it.id, newHotel.id);
           }
         }
       }
@@ -998,6 +1006,24 @@ export default function TripDetail() {
       // 3. 删除新旅程中的空天
       for (const nd of [...newDays]) {
         if (!usedDaySeqs.has(nd.daySeq)) await db.removeDay(nd.id).catch(() => {});
+      }
+
+      // 3.5 复制【大交通】与【记账】(此前遗漏,导致新行程没有花费)
+      const srcTransports = await db.listTransports(trip.id);
+      const transportIdMap = new Map<string, string>();
+      for (const t of srcTransports) {
+        const created = await db.addTransport({ ...remapTransports([t], newTrip.id)[0] });
+        transportIdMap.set(t.id, created.id);
+      }
+
+      // 保留天的新 dayId(按日期索引,供没有 dayId 的记账回填)
+      const keptDays = await db.listDays(newTrip.id);
+      const dayIdByDate = new Map(keptDays.map((d) => [d.date, d.id]));
+      const srcExpenses = await db.listExpenses(trip.id);
+      for (const e of remapExpenses(srcExpenses, newTrip.id, {
+        dayIdMap, dayIdByDate, itemIdMap, hotelIdMap, transportIdMap,
+      })) {
+        await db.addExpense(e);
       }
 
       // 4. 天内部顺路优化(静默)
