@@ -113,6 +113,9 @@ export async function backupTrip(tripId: string): Promise<boolean> {
     const snap = await collectTripData(tripId);
     if (!snap) return false;
     await STORAGE.save(tripId, snap);
+    // 备份成功后对齐本地时间戳（见 adoptSyncedAt 注释）：
+    // 否则云端时间必然更"新"，下次 reconcile 会用云端覆盖刚改的内容。
+    await db.adoptSyncedAt(tripId, snap.savedAt);
     return true;
   } catch (e) {
     console.warn('[sync] 备份失败:', e);

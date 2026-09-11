@@ -64,6 +64,47 @@ export class TravelDb extends Dexie implements Db {
     return (await this.trips.get(id)) ?? null;
   }
 
+  /**
+   * 触碰旅程的 updatedAt。
+   *
+   * ⚠️ 所有会改变旅程【内容】的操作都必须调用它（加景点/酒店/记账/改天等）。
+   * 否则：reconcile 比较的是 trip.updatedAt 与云端 updated_at，
+   * 而云端每次备份都会刷新该时间 → 判定"云端更新" → restoreTrip 整体覆盖本地
+   * → 用户刚添加的内容被抹掉（历史上表现为"要加两次才生效"）。
+   * 删除操作(deleteTrip)不需要。
+   */
+  async touchTrip(tripId: string | undefined | null): Promise<void> {
+    if (!tripId) return;
+    try { await this.trips.update(tripId, { updatedAt: new Date().toISOString() }); }
+    catch { /* trip 可能已删除,忽略 */ }
+  }
+
+  /** 由 dayId 反查 tripId（item / day 相关操作触碰 updatedAt 时用） */
+  private async tripIdByDay(dayId: string): Promise<string | null> {
+    const day = await this.itineraryDays.get(dayId);
+    return day?.tripId ?? null;
+  }
+
+  /**
+   * 备份成功后，把本地 updatedAt 对齐到云端存的时间戳。
+   *
+   * 必要性：备份发生在修改【之后】，若云端用服务端 now() 作为 updated_at，
+   * 它必然大于本地 trip.updatedAt → 下次 reconcile 判定「云端更新」→ 用云端
+   * 快照覆盖本地 → 刚改的内容被回滚（历史上表现为"要加两次才生效"）。
+   * 约定：服务端存快照自带的 savedAt，这里对齐到同一个值，两边即收敛为相等。
+   */
+  async adoptSyncedAt(tripId: string, isoTs: string): Promise<void> {
+    if (!tripId || !isoTs) return;
+    try {
+      const cur = await this.trips.get(tripId);
+      if (!cur) return;
+      // 只向前对齐：若备份期间又产生了更新(本地更新),不要把它回退成旧值
+      const curTs = cur.updatedAt ? new Date(cur.updatedAt).getTime() : 0;
+      if (new Date(isoTs).getTime() < curTs) return;
+      await this.trips.update(tripId, { updatedAt: isoTs });
+    } catch { /* trip 可能已删除,忽略 */ }
+  }
+
   /** 新增旅程;id 缺省随机生成,恢复时传原 id 保持本地=云端一致 */
   async createTrip(input: Omit<Trip, 'id' | 'status'>, id?: string): Promise<Trip> {
     const tripId = id || uuid();
@@ -117,6 +158,7 @@ export class TravelDb extends Dexie implements Db {
 
   async updateDay(dayId: string, patch: Partial<ItineraryDay>): Promise<void> {
     await this.itineraryDays.update(dayId, patch);
+    await this.touchTrip(await this.tripIdByDay(dayId));
   }
 
   /** V5.0:在指定日期前插入一天,daySeq 自动重排 */
@@ -142,6 +184,7 @@ export class TravelDb extends Dexie implements Db {
     }
 
     await this.itineraryDays.add(newDay);
+    await this.touchTrip(tripId);
     return newDay;
   }
 
@@ -149,9 +192,12 @@ export class TravelDb extends Dexie implements Db {
   async removeDay(dayId: string): Promise<void> {
     const day = await this.itineraryDays.get(dayId);
     if (!day) return;
-    await this.transaction('rw', this.itineraryItems, this.itineraryDays, async () => {
+    await this.transaction('rw', this.itineraryItems, this.itineraryDays, this.expenses, async () => {
       await this.itineraryItems.where({ dayId }).delete();
       await this.itineraryDays.delete(dayId);
+      // 同时清理该天的记账,否则会留下"孤儿"记录(曾出现删除天后
+      // 「门票 · XX」仍挂在账上,而对应景点已不存在)
+      await this.expenses.where({ dayId }).delete();
 
       // 重排剩余 days 的 daySeq
       const remaining = await this.itineraryDays.where({ tripId: day.tripId }).sortBy('daySeq');
@@ -161,6 +207,7 @@ export class TravelDb extends Dexie implements Db {
         }
       }
     });
+    await this.touchTrip(day.tripId);
   }
 
   // ── items ──
@@ -174,11 +221,14 @@ export class TravelDb extends Dexie implements Db {
     const max = await this.itineraryItems.where({ dayId: item.dayId }).count();
     const created: ItineraryItem = { ...item, id, orderSeq: max };
     await this.itineraryItems.add(created);
+    await this.touchTrip(await this.tripIdByDay(item.dayId));
     return created;
   }
 
   async updateItem(id: string, patch: Partial<ItineraryItem>): Promise<void> {
+    const before = await this.itineraryItems.get(id);
     await this.itineraryItems.update(id, patch);
+    if (before) await this.touchTrip(await this.tripIdByDay(before.dayId));
   }
 
   async moveItem(dayId: string, itemId: string, newOrder: number): Promise<void> {
@@ -194,10 +244,14 @@ export class TravelDb extends Dexie implements Db {
         }
       }
     });
+    await this.touchTrip(await this.tripIdByDay(dayId));
   }
 
   /** V6.2 拖拽:跨天移动(更新 item 的 dayId,再重排两边 orderSeq) */
   async moveItemAcrossDays(itemId: string, targetDayId: string, targetOrder: number): Promise<void> {
+    // 先取 tripId(事务外读 itineraryDays;事务内读未声明的表会抛错)
+    const preItem = await this.itineraryItems.get(itemId);
+    const tripId = preItem ? await this.tripIdByDay(preItem.dayId) : null;
     await this.transaction('rw', this.itineraryItems, async () => {
       const item = await this.itineraryItems.get(itemId);
       if (!item) return;
@@ -226,10 +280,13 @@ export class TravelDb extends Dexie implements Db {
         if (dstItems[i].orderSeq !== i) await this.itineraryItems.update(dstItems[i].id, { orderSeq: i });
       }
     });
+    await this.touchTrip(tripId);
   }
 
   async removeItem(id: string): Promise<void> {
+    const before = await this.itineraryItems.get(id);
     await this.itineraryItems.delete(id);
+    if (before) await this.touchTrip(await this.tripIdByDay(before.dayId));
   }
 
   // ── pois ──
@@ -259,15 +316,20 @@ export class TravelDb extends Dexie implements Db {
     const id = uuid();
     const created: Expense = { ...exp, id, dirty: 0 };
     await this.expenses.add(created);
+    await this.touchTrip(exp.tripId);
     return created;
   }
 
   async updateExpense(id: string, patch: Partial<Expense>): Promise<void> {
+    const before = await this.expenses.get(id);
     await this.expenses.update(id, patch);
+    if (before) await this.touchTrip(before.tripId);
   }
 
   async removeExpense(id: string): Promise<void> {
+    const before = await this.expenses.get(id);
     await this.expenses.delete(id);
+    if (before) await this.touchTrip(before.tripId);
   }
 
   async sumExpenses(tripId: string): Promise<number> {
@@ -340,15 +402,20 @@ export class TravelDb extends Dexie implements Db {
     const id = uuid();
     const created: Hotel = { ...hotel, id };
     await this.hotels.add(created);
+    await this.touchTrip(hotel.tripId);
     return created;
   }
 
   async updateHotel(id: string, patch: Partial<Hotel>): Promise<void> {
+    const before = await this.hotels.get(id);
     await this.hotels.update(id, patch);
+    if (before) await this.touchTrip(before.tripId);
   }
 
   async removeHotel(id: string): Promise<void> {
+    const before = await this.hotels.get(id);
     await this.hotels.delete(id);
+    if (before) await this.touchTrip(before.tripId);
   }
 
   // ── transports ──
@@ -361,15 +428,20 @@ export class TravelDb extends Dexie implements Db {
     const id = uuid();
     const created: Transport = { ...transport, id };
     await this.transports.add(created);
+    await this.touchTrip(transport.tripId);
     return created;
   }
 
   async updateTransport(id: string, patch: Partial<Transport>): Promise<void> {
+    const before = await this.transports.get(id);
     await this.transports.update(id, patch);
+    if (before) await this.touchTrip(before.tripId);
   }
 
   async removeTransport(id: string): Promise<void> {
+    const before = await this.transports.get(id);
     await this.transports.delete(id);
+    if (before) await this.touchTrip(before.tripId);
   }
 
   // ── settings ──

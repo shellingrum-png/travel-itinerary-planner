@@ -11,6 +11,8 @@ export interface Db {
   listTrips(): Promise<Trip[]>;
   getTrip(id: string): Promise<Trip | null>;
   createTrip(input: Omit<Trip, 'id' | 'status'>, id?: string): Promise<Trip>;
+  /** 触碰旅程 updatedAt(所有内容变更必须调用,否则云端会覆盖本地) */
+  touchTrip(tripId: string | undefined | null): Promise<void>;
   // 自动生成 itinerary_days(day_seq=1..N);id 缺省随机,恢复时可传原 id
   updateTrip(id: string, patch: Partial<Trip>): Promise<void>;
   deleteTrip(id: string): Promise<void>;

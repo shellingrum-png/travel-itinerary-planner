@@ -93,7 +93,11 @@ async function snapSave(userId, tripId, snap) {
         user_id: userId,
         title: snap.trip?.title || '',
         snapshot: snap,        // 完整快照放 jsonb
-        updated_at: new Date().toISOString(),
+        // 用客户端快照里的 savedAt,而【不是】服务端 now():
+        // 前端备份成功后会把自己的 updatedAt 对齐到同一个值,两边才会收敛为相等;
+        // 若用服务端时间,云端永远比本地"新",reconcile 会反复用旧快照覆盖本地
+        // (表现为"新加的内容要加两次才生效")。缺失时退回服务端时间。
+        updated_at: snap.savedAt || new Date().toISOString(),
       }),
     });
     return true;
