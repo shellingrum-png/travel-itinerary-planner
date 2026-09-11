@@ -941,6 +941,8 @@ export default function TripDetail() {
 
     try {
       // 1. 创建新旅程(自动生成天数骨架)
+      //    注意:必须带上 totalBudget —— 详情页的花费区以它为显示条件,
+      //    漏了会导致"复制出来的行程看不到记账"(记账其实在,只是没显示)
       const newTrip = await db.createTrip({
         title,
         destination: trip.destination,
@@ -948,6 +950,7 @@ export default function TripDetail() {
         endDate: trip.endDate,
         companionCount: trip.companionCount,
         currency: trip.currency,
+        totalBudget: trip.totalBudget,
         cityNodes: trip.cityNodes,
       });
       const newDays = await db.listDays(newTrip.id);
@@ -1409,10 +1412,18 @@ export default function TripDetail() {
         </div>
         {!online && <div style={{ background: 'rgba(255,209,102,0.12)', padding: 6, borderRadius: 6, margin: '8px 0', fontSize: 12, color: '#ffd166' }}>当前为离线/弱网模式</div>}
 
-        {trip.totalBudget && (
+        {trip.totalBudget ? (
           <div style={{ marginBottom: 10, display: 'flex', gap: 12, fontSize: 13 }}>
             <span>已花 ¥{spent.toFixed(0)}</span>
             <span style={{ color: spent > trip.totalBudget ? '#c00' : '#2e7d32' }}>剩余 ¥{Math.max(0, trip.totalBudget - spent).toFixed(0)}</span>
+            <Link to={`/trip/${trip.id}/bookkeeping`} style={{ color: '#1677ff', marginLeft: 'auto' }}>记账</Link>
+            <Link to={`/trip/${trip.id}/overview`} style={{ color: '#06d6a0' }}>📊 概览</Link>
+          </div>
+        ) : (
+          // 未设预算时仍保留花费与入口(此前整块隐藏,导致复制出的行程"看不到记账")
+          <div style={{ marginBottom: 10, display: 'flex', gap: 12, fontSize: 13, alignItems: 'center' }}>
+            <span style={{ color: spent > 0 ? '#eee' : '#9a9ab0' }}>已花 ¥{spent.toFixed(0)}</span>
+            <span style={{ color: '#6b7a8f', fontSize: 12 }}>未设预算</span>
             <Link to={`/trip/${trip.id}/bookkeeping`} style={{ color: '#1677ff', marginLeft: 'auto' }}>记账</Link>
             <Link to={`/trip/${trip.id}/overview`} style={{ color: '#06d6a0' }}>📊 概览</Link>
           </div>
