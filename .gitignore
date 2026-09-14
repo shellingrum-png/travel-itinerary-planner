@@ -28,3 +28,10 @@ __pycache__/
 
 # 后端快照数据(个人数据勿提交)
 server/snapshots/
+
+# 本地运行日志 + 数据备份(含个人行程数据勿提交)
+logs/
+backups/
+
+# Vite 运行时临时配置
+vite.config.ts.timestamp-*.mjs

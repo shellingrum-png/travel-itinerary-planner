@@ -142,6 +142,13 @@ CREATE TABLE expenses (
   ref_type TEXT,                    -- V6.2:关联对象类型 poi|hotel|transport|itinerary_item
   ref_id   TEXT,                    -- V6.2:关联对象 id(如 poi_id / hotel_id / transport_id)
   day_id   TEXT,                    -- V6.2:关联的日程天 id
+  split_mode TEXT,                  -- V12:even|parts;缺省=even(全员均摊)
+  parts_json TEXT,                  -- V12:parts 明细(JSON 数组:label/units/unitPrice/memberId)
+  participant_ids_json TEXT,        -- V12:参与分摊的成员 id(JSON 数组;缺省=全体)
+  ticket_count REAL,                -- 门票:购票总张数(人数);缺省=1(旧数据视为 1 张成人票)
+  unit_price   REAL,                -- 门票:成人/普通票单价
+  senior_count REAL,                -- 门票:老人票张数(0=无)
+  senior_price REAL,                -- 门票:老人票单价(0=免费)
   updated_at TEXT DEFAULT (datetime('now'))
 );
 -- V6.2 索引:按关联对象快速聚合查询

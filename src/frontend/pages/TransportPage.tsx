@@ -103,24 +103,31 @@ export default function TransportPage() {
       const created = await db.addTransport({ tripId, ...form });
       transportId = created.id;
     }
-    // V6.2 联动记账:票价
+    // V6.2 联动记账:票价(编辑时 upsert;票价清空则删除关联费用)
     const p = parseFloat(price);
+    const date = form.departAt.slice(0, 10);
+    const linked = editId ? (await db.listExpenses(tripId)).find((e) => e.refType === 'transport' && e.refId === editId && e.category === 'transport') : undefined;
     if (!isNaN(p) && p > 0 && tripId) {
       const label = `${form.flightNo || form.trainNo || ''} ${form.fromPlace}→${form.toPlace}`.trim();
-      const date = form.departAt.slice(0, 10);
-      await db.addExpense({
-        tripId, category: 'transport', amount: p,
-        currency: trip?.currency ?? 'CNY', date,
-        note: `大交通 · ${label}`,
-        refType: 'transport', refId: transportId,
-      });
+      if (linked) {
+        await db.updateExpense(linked.id, { amount: p, date, note: `大交通 · ${label}` });
+      } else {
+        await db.addExpense({
+          tripId, category: 'transport', amount: p,
+          currency: trip?.currency ?? 'CNY', date,
+          note: `大交通 · ${label}`,
+          refType: 'transport', refId: transportId,
+        });
+      }
+    } else if (linked) {
+      await db.removeExpense(linked.id);
     }
     resetForm();
     setShowForm(false);
     await load();
   };
 
-  const handleEdit = (t: Transport) => {
+  const handleEdit = async (t: Transport) => {
     setForm({
       segType: t.segType, mode: t.mode,
       fromPlace: t.fromPlace ?? '', toPlace: t.toPlace ?? '',
@@ -128,6 +135,12 @@ export default function TransportPage() {
       flightNo: t.flightNo ?? '', trainNo: t.trainNo ?? '',
     });
     setEditId(t.id); setShowForm(true); setError(null);
+    // 回填票价(编辑保存时不会再新建一笔)
+    if (tripId) {
+      const exps = await db.listExpenses(tripId);
+      const linked = exps.find((e) => e.refType === 'transport' && e.refId === t.id && e.category === 'transport');
+      setPrice(linked ? String(linked.amount) : '');
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -227,7 +240,7 @@ export default function TransportPage() {
                   <div style={{ fontSize: 13, marginTop: 4 }}>{t.fromPlace} → {t.toPlace}</div>
                   <div style={{ fontSize: 12, color: '#9a9ab2', marginTop: 2 }}>{formatTime(t.departAt)} → {formatTime(t.arriveAt)}</div>
                 </div>
-                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
                   <button onClick={() => handleEdit(t)} style={{ ...btnGhost, ...btnSmall }}>编辑</button>
                   <button onClick={() => handleDelete(t.id)} style={{ ...btnGhost, ...btnSmall, color: C.danger }}>删除</button>
                 </div>

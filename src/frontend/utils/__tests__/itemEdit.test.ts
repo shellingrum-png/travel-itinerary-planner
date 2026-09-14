@@ -44,17 +44,35 @@ describe('buildItemPatch', () => {
 });
 
 describe('ticketAction', () => {
-  it('存在关联 ticket 记账 → update', () => {
-    const exps: Expense[] = [{ id: 'e1', tripId: 't1', category: 'ticket', amount: 60, currency: 'CNY', dirty: 0, refType: 'itinerary_item', refId: 'it1', dayId: 'd1' }] as Expense[];
-    const r = ticketAction(exps, item, 80, trip);
+  const linkedExps = (): Expense[] => [{ id: 'e1', tripId: 't1', category: 'ticket', amount: 60, currency: 'CNY', dirty: 0, refType: 'itinerary_item', refId: 'it1', dayId: 'd1' }] as Expense[];
+
+  it('存在关联 ticket 记账 → update(patch 含金额)', () => {
+    const r = ticketAction(linkedExps(), item, 80, trip);
     expect(r.kind).toBe('update');
-    if (r.kind === 'update') expect(r.id).toBe('e1');
+    if (r.kind === 'update') {
+      expect(r.id).toBe('e1');
+      expect(r.patch).toEqual({ amount: 80 });
+    }
   });
-  it('无关联记账 → add,refId/dayId 正确', () => {
-    const r = ticketAction([], item, 80, trip, '2026-09-30');
+  it('update 携带人数/老人字段', () => {
+    const r = ticketAction(linkedExps(), item, 420, trip, undefined, { ticketCount: 4, unitPrice: 120, seniorCount: 1, seniorPrice: 60 });
+    expect(r.kind).toBe('update');
+    if (r.kind === 'update') {
+      expect(r.patch).toEqual({ amount: 420, ticketCount: 4, unitPrice: 120, seniorCount: 1, seniorPrice: 60 });
+    }
+  });
+  it('无关联记账 → add,refId/dayId 正确,可带 meta', () => {
+    const r = ticketAction([], item, 420, trip, '2026-09-30', { ticketCount: 4, unitPrice: 120, seniorCount: 1, seniorPrice: 60 });
     expect(r.kind).toBe('add');
     if (r.kind === 'add') {
-      expect(r.exp).toMatchObject({ category: 'ticket', refType: 'itinerary_item', refId: 'it1', dayId: 'd1', amount: 80, date: '2026-09-30' });
+      expect(r.exp).toMatchObject({ category: 'ticket', refType: 'itinerary_item', refId: 'it1', dayId: 'd1', amount: 420, date: '2026-09-30', ticketCount: 4, unitPrice: 120, seniorCount: 1, seniorPrice: 60 });
+    }
+  });
+  it('meta 全空时不写入空 key', () => {
+    const r = ticketAction([], item, 80, trip, undefined, { ticketCount: undefined });
+    expect(r.kind).toBe('add');
+    if (r.kind === 'add') {
+      expect('ticketCount' in r.exp).toBe(false);
     }
   });
   it('金额非法(<=0)→ none', () => {

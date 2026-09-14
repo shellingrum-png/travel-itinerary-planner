@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { db } from '../services/db';
 import { loadAMap } from '../services/amapLoader';
 import { C, btn, btnGhost, btnSmall, card, input, PageHeader, EmptyState } from '../components/ui';
-import type { Hotel } from '../types';
+import type { Hotel, Trip, ItineraryItem, Expense } from '../types';
 
 const DEFAULT_LNG = 116.397;
 const DEFAULT_LAT = 39.908;
@@ -11,6 +11,9 @@ const DEFAULT_LAT = 39.908;
 export default function HotelsPage() {
   const { id: tripId } = useParams<{ id: string }>();
   const [hotels, setHotels] = useState<Hotel[]>([]);
+  const [trip, setTrip] = useState<Trip | null>(null);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [items, setItems] = useState<ItineraryItem[]>([]); // 全旅程 items,用于按 poiId 关联费用
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -25,6 +28,12 @@ export default function HotelsPage() {
   });
   const [error, setError] = useState<string | null>(null);
   const [pickingCoords, setPickingCoords] = useState(false);
+  // 费用(并入编辑表单)
+  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expenseDate, setExpenseDate] = useState('');
+  const [expenseNote, setExpenseNote] = useState('');
+  const [hadExpense, setHadExpense] = useState(false);
+  const [clearExpense, setClearExpense] = useState(false);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
@@ -32,6 +41,13 @@ export default function HotelsPage() {
   const load = async () => {
     if (!tripId) return;
     setHotels(await db.listHotels(tripId));
+    setTrip(await db.getTrip(tripId));
+    setExpenses(await db.listExpenses(tripId));
+    // 收集全旅程 hotel item,用于按 poiId 匹配酒店 → 关联费用
+    const days = await db.listDays(tripId);
+    const all: ItineraryItem[] = [];
+    for (const d of days) all.push(...(await db.listItems(d.id)));
+    setItems(all);
   };
 
   useEffect(() => { load(); }, [tripId]);
@@ -41,6 +57,8 @@ export default function HotelsPage() {
     setError(null);
     setEditId(null);
     setPickingCoords(false);
+    setExpenseAmount(''); setExpenseDate(''); setExpenseNote('');
+    setHadExpense(false); setClearExpense(false);
   };
 
   const handleSubmit = async () => {
@@ -64,12 +82,42 @@ export default function HotelsPage() {
     } else {
       await db.addHotel(data);
     }
+
+    // 费用(仅编辑模式可关联:酒店通过 poiId 匹配日程 item → 记账)
+    if (editId) {
+      const current = hotels.find((h) => h.id === editId);
+      const item = current ? items.find((x) => x.itemType === 'hotel' && x.poiId === current.poiId) : null;
+      if (item) {
+        const linked = expenses.find((e) => e.refType === 'itinerary_item' && e.refId === item.id && e.category === 'hotel');
+        if (clearExpense) {
+          if (linked) await db.removeExpense(linked.id);
+        } else {
+          const ea = parseFloat(expenseAmount);
+          if (!isNaN(ea) && ea > 0) {
+            const upd: Partial<Expense> = { amount: ea };
+            if (expenseDate) upd.date = expenseDate;
+            if (expenseNote.trim()) upd.note = expenseNote.trim();
+            if (linked) await db.updateExpense(linked.id, upd);
+            else {
+              const exp: Omit<Expense, 'id' | 'dirty'> = {
+                tripId, category: 'hotel', amount: ea, currency: trip?.currency ?? 'CNY',
+                refType: 'itinerary_item', refId: item.id, dayId: item.dayId,
+              };
+              if (expenseDate) exp.date = expenseDate;
+              if (expenseNote.trim()) exp.note = expenseNote.trim();
+              await db.addExpense(exp);
+            }
+          }
+        }
+      }
+    }
+
     resetForm();
     setShowForm(false);
     await load();
   };
 
-  const handleEdit = (h: Hotel) => {
+  const handleEdit = async (h: Hotel) => {
     setForm({
       name: h.name,
       address: h.address ?? '',
@@ -83,6 +131,14 @@ export default function HotelsPage() {
     setEditId(h.id);
     setShowForm(true);
     setError(null);
+    // 预取费用
+    const item = items.find((x) => x.itemType === 'hotel' && x.poiId === h.poiId);
+    const linked = item ? expenses.find((e) => e.refType === 'itinerary_item' && e.refId === item.id && e.category === 'hotel') : undefined;
+    setExpenseAmount(linked ? String(linked.amount) : '');
+    setExpenseDate(linked?.date ?? '');
+    setExpenseNote(linked?.note ?? '');
+    setHadExpense(!!linked);
+    setClearExpense(false);
   };
 
   const handleDelete = async (id: string) => {
@@ -175,6 +231,20 @@ export default function HotelsPage() {
               <input type="time" value={form.checkOutTime} onChange={(e) => setForm({ ...form, checkOutTime: e.target.value })} style={input} />
             </div>
           </div>
+          {editId && (
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ fontSize: 12, color: '#9a9ab2', display: 'block', marginBottom: 4 }}>费用(元,选填)</label>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <input type="number" min="0" step="0.01" placeholder="金额" value={expenseAmount} onChange={(e) => { setExpenseAmount(e.target.value); setClearExpense(false); }} style={{ ...input, flex: 1 }} />
+                <input type="date" value={expenseDate} onChange={(e) => setExpenseDate(e.target.value)} style={{ ...input, width: '50%' }} />
+              </div>
+              <input placeholder="备注(选填)" value={expenseNote} onChange={(e) => setExpenseNote(e.target.value)} style={{ ...input, marginBottom: 6 }} />
+              {hadExpense && (
+                <button onClick={() => setClearExpense(true)} style={{ ...btnGhost, ...btnSmall, color: C.danger, borderColor: 'rgba(255,107,107,0.3)' }}>删除费用</button>
+              )}
+              {clearExpense && <div style={{ fontSize: 12, color: C.danger, marginTop: 4 }}>保存后将删除这笔费用。</div>}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={handleSubmit} style={btn()}>{editId ? '保存修改' : '确认添加'}</button>
             <button onClick={() => { setShowForm(false); resetForm(); }} style={btnGhost}>取消</button>
@@ -202,7 +272,7 @@ export default function HotelsPage() {
                     <div style={{ fontSize: 11, color: '#5a5a70', marginTop: 3 }}>坐标: {h.lng.toFixed(4)}, {h.lat.toFixed(4)}</div>
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
                   <button onClick={() => handleEdit(h)} style={{ ...btnGhost, ...btnSmall }}>编辑</button>
                   <button onClick={() => handleDelete(h.id)} style={{ ...btnGhost, ...btnSmall, color: C.danger }}>删除</button>
                 </div>

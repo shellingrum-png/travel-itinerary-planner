@@ -4,6 +4,8 @@ import { db } from '../services/db';
 import type { Expense, ExpenseCategory, ExpensePart, SplitMode, Trip, TripMember } from '../types';
 import { C, btn, btnGhost, btnSmall, input, PageHeader, EmptyState, card } from '../components/ui';
 import MemberModal from '../components/MemberModal';
+import TicketFields, { emptyTicketFields, ticketFieldsFromExpense, type TicketFieldsValue } from '../components/TicketFields';
+import { ticketAmount, ticketSummary } from '../utils/ticket';
 import {
   effectiveMembers, expenseShares, computeMemberSpend, partsTotal, splitSummary, participatesIn,
 } from '../utils/split';
@@ -41,6 +43,9 @@ export default function Bookkeeping() {
   const [splitUi, setSplitUi] = useState<SplitUi>('all');
   const [participants, setParticipants] = useState<string[]>([]);
   const [draftParts, setDraftParts] = useState<DraftPart[]>([emptyPart()]);
+  /** 编辑模式:null = 新增 */
+  const [editId, setEditId] = useState<string | null>(null);
+  const [ticketFields, setTicketFields] = useState<TicketFieldsValue>(emptyTicketFields);
   /** 按人查看:null = 全部 */
   const [focusMemberId, setFocusMemberId] = useState<string | null>(null);
 
@@ -105,9 +110,26 @@ export default function Bookkeeping() {
   const resetForm = () => {
     setAmount(''); setNote(''); setPaidBy(''); setError(null);
     setSplitUi('all'); setParticipants([]); setDraftParts([emptyPart()]);
+    setEditId(null); setTicketFields(emptyTicketFields());
   };
 
-  const handleAdd = async () => {
+  /** 打开编辑:预填所有表单字段(含分摊/门票) */
+  const openEdit = (e: Expense) => {
+    setEditId(e.id);
+    setAmount(String(e.amount));
+    setCategory(e.category);
+    setNote(e.note ?? '');
+    setDate(e.date ?? new Date().toISOString().slice(0, 10));
+    setPaidBy(e.paidBy ?? '');
+    setSplitUi(e.splitMode === 'parts' ? 'parts' : e.participantIds && e.participantIds.length ? 'some' : 'all');
+    setParticipants(e.participantIds ?? []);
+    setDraftParts(e.parts?.map((p) => ({ label: p.label, units: String(p.units), unitPrice: String(p.unitPrice), memberId: p.memberId ?? '' })) ?? [emptyPart()]);
+    setTicketFields(ticketFieldsFromExpense(e));
+    setError(null);
+    setShowForm(true);
+  };
+
+  const handleSubmit = async () => {
     const err = validate();
     if (err) { setError(err); return; }
     if (!tripId) return;
@@ -121,6 +143,26 @@ export default function Bookkeeping() {
       note: note || undefined,
       paidBy: paidBy || undefined,
     };
+
+    // 门票分类:填了人数/老人 → 联动总额并写入字段
+    if (category === 'ticket') {
+      const hasTicket = ticketFields.count !== '' || ticketFields.unitPrice !== '' || ticketFields.seniorCount !== '' || ticketFields.seniorPrice !== '';
+      if (hasTicket) {
+        const tk = ticketAmount({
+          count: parseFloat(ticketFields.count),
+          unitPrice: parseFloat(ticketFields.unitPrice),
+          seniorCount: parseFloat(ticketFields.seniorCount),
+          seniorPrice: parseFloat(ticketFields.seniorPrice),
+        });
+        if (tk > 0) {
+          patch.amount = tk;
+          if (ticketFields.count !== '') patch.ticketCount = parseFloat(ticketFields.count);
+          if (ticketFields.unitPrice !== '') patch.unitPrice = parseFloat(ticketFields.unitPrice);
+          if (ticketFields.seniorCount !== '') patch.seniorCount = parseFloat(ticketFields.seniorCount);
+          if (ticketFields.seniorPrice !== '') patch.seniorPrice = parseFloat(ticketFields.seniorPrice);
+        }
+      }
+    }
 
     if (splitUi === 'parts') {
       const parts: ExpensePart[] = draftParts
@@ -139,7 +181,11 @@ export default function Bookkeeping() {
     }
     // splitUi === 'all' → 不写分摊字段,等价于「全员均摊」(旧数据同款,最省存储)
 
-    await db.addExpense(patch);
+    if (editId) {
+      await db.updateExpense(editId, patch);
+    } else {
+      await db.addExpense(patch);
+    }
     resetForm();
     setShowForm(false);
     await load();
@@ -249,6 +295,7 @@ export default function Bookkeeping() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {visibleExpenses.map((e) => {
             const summary = splitSummary(e, members);
+            const tsum = ticketSummary(e);
             return (
               <div key={e.id} style={{ padding: '12px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderRadius: 10, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
                 <div style={{ minWidth: 0, flex: 1 }}>
@@ -259,6 +306,9 @@ export default function Bookkeeping() {
                   <div style={{ color: '#6a6a80', fontSize: 12, marginTop: 2 }}>
                     {e.date}{e.note ? ` · ${e.note}` : ''}{e.paidBy ? ` · ${e.paidBy}付` : ''}
                   </div>
+                  {tsum && (
+                    <div style={{ color: '#8f9ab8', fontSize: 11, marginTop: 3 }}>{tsum}</div>
+                  )}
                   {summary && (
                     <div style={{ color: C.info, fontSize: 11, marginTop: 3 }}>{summary}</div>
                   )}
@@ -269,9 +319,10 @@ export default function Bookkeeping() {
                     </div>
                   )}
                 </div>
-                <button onClick={() => handleDelete(e.id)} style={{ ...btnGhost, ...btnSmall, color: C.danger, flexShrink: 0 }}>
-                  删除
-                </button>
+                <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                  <button onClick={() => openEdit(e)} style={{ ...btnGhost, ...btnSmall }}>编辑</button>
+                  <button onClick={() => handleDelete(e.id)} style={{ ...btnGhost, ...btnSmall, color: C.danger }}>删除</button>
+                </div>
               </div>
             );
           })}
@@ -282,8 +333,19 @@ export default function Bookkeeping() {
       {!showForm ? (
         <button onClick={() => { setShowForm(true); if (members.length) setParticipants([]); }} style={{ ...btn(), marginTop: 12 }}>+ 记一笔</button>
       ) : (
-        <div style={{ marginTop: 12, padding: 16, border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 12, background: 'rgba(255,255,255,0.02)' }}>
-          {error && <p style={{ color: C.danger, fontSize: 13, marginTop: 0 }}>{error}</p>}
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => { setShowForm(false); resetForm(); }}
+        >
+          <div
+            style={{ background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 14, padding: 20, width: '100%', maxWidth: 440, maxHeight: '85vh', overflow: 'auto', color: '#eee' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <strong style={{ fontSize: 16, color: '#ffd166' }}>{editId ? '✏️ 编辑消费' : '+ 记一笔'}</strong>
+              <button onClick={() => { setShowForm(false); resetForm(); }} style={{ background: 'none', border: 'none', color: '#888', fontSize: 20, cursor: 'pointer' }}>×</button>
+            </div>
+            {error && <p style={{ color: C.danger, fontSize: 13, marginTop: 0 }}>{error}</p>}
           <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
             <input type="number" placeholder="金额" value={amount} onChange={(e) => { setAmount(e.target.value); setError(null); }} style={{ ...input, width: 100 }} step="0.01" min="0" />
             <select value={category} onChange={(e) => setCategory(e.target.value as ExpenseCategory)} style={{ ...input, width: 'auto' }}>
@@ -296,6 +358,25 @@ export default function Bookkeeping() {
               {members.map((m) => (<option key={m.id} value={m.name}>{m.name}</option>))}
             </select>
           </div>
+
+          {/* 门票分类:人数/老人优惠录入,合计自动回填金额 */}
+          {category === 'ticket' && (
+            <div style={{ marginBottom: 8 }}>
+              <TicketFields
+                value={ticketFields}
+                onChange={(v) => {
+                  setTicketFields(v);
+                  const tk = ticketAmount({
+                    count: parseFloat(v.count),
+                    unitPrice: parseFloat(v.unitPrice),
+                    seniorCount: parseFloat(v.seniorCount),
+                    seniorPrice: parseFloat(v.seniorPrice),
+                  });
+                  if (tk > 0) setAmount(String(tk));
+                }}
+              />
+            </div>
+          )}
 
           {/* 分摊方式 */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
@@ -387,8 +468,9 @@ export default function Bookkeeping() {
           )}
 
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-            <button onClick={handleAdd} style={btn()}>确认</button>
+            <button onClick={handleSubmit} style={btn()}>{editId ? '保存修改' : '确认'}</button>
             <button onClick={() => { setShowForm(false); resetForm(); }} style={btnGhost}>取消</button>
+          </div>
           </div>
         </div>
       )}

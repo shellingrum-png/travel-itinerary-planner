@@ -172,6 +172,14 @@ export interface Expense {
   parts?: ExpensePart[];
   /** V12 even 模式下参与分摊的成员 id;缺省=全体成员 */
   participantIds?: string[];
+  /** 门票:购票总张数(人数);缺省=1(旧数据视为 1 张成人票,amount=单价) */
+  ticketCount?: number;
+  /** 门票:成人/普通票单价 */
+  unitPrice?: number;
+  /** 门票:老人票张数(0=无) */
+  seniorCount?: number;
+  /** 门票:老人票单价(0=免费) */
+  seniorPrice?: number;
 }
 
 // 路径规划缓存

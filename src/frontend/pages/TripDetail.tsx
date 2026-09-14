@@ -15,11 +15,14 @@ import { optimizeItinerary, estimateDayCapacity, estimateReachablePois, dayWindo
 import type { ItineraryPoi, DayAnchor } from '../services/itineraryEngine';
 import ItemEditModal, { type EditPatch } from '../components/ItemEditModal';
 import MemberModal from '../components/MemberModal';
+import TransportEditModal, { type TransportEditPatch } from '../components/TransportEditModal';
+import TicketFields, { emptyTicketFields, type TicketFieldsValue } from '../components/TicketFields';
 import { C } from '../components/ui';
 import { modeIcon, fmtDT, dayTransports, isBigTransportMode } from '../utils/transportFormat';
 import { buildItemPatch, ticketAction } from '../utils/itemEdit';
 import { effectiveMembers } from '../utils/split';
-import type { Trip, ItineraryDay, ItineraryItem, Poi, PoiAiCard, Hotel, TransportMode, Transport, TransportModeType, TransportSegmentType } from '../types';
+import { ticketAmount } from '../utils/ticket';
+import type { Trip, ItineraryDay, ItineraryItem, Poi, PoiAiCard, Hotel, TransportMode, Transport, TransportModeType, TransportSegmentType, Expense } from '../types';
 import { uuid } from '../utils/uuid';
 
 const DAY_COLORS = [
@@ -44,6 +47,7 @@ export default function TripDetail() {
   const [days, setDays] = useState<ItineraryDay[]>([]);
   const [daySummaries, setDaySummaries] = useState<Array<{ day: ItineraryDay; items: (ItineraryItem & { poi?: Poi; aiCard?: PoiAiCard })[] }>>([]);
   const [spent, setSpent] = useState(0);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
   const online = useOnlineStatus();
   const [transports, setTransports] = useState<Transport[]>([]); // 大交通表
   const [showMembers, setShowMembers] = useState(false); // V12 成员管理弹窗
@@ -62,7 +66,7 @@ export default function TripDetail() {
   const [selectedScenic, setSelectedScenic] = useState<SearchResult | null>(null);
   const [scenicCard, setScenicCard] = useState<PoiAiCard | null>(null);
   const [scenicCardLoading, setScenicCardLoading] = useState(false);
-  const [ticketPrice, setTicketPrice] = useState(''); // V6.2 关联记账:门票价
+  const [ticketFields, setTicketFields] = useState<TicketFieldsValue>(emptyTicketFields); // 门票(人数/老人优惠)
 
   // 酒店搜索
   const [hotelKeyword, setHotelKeyword] = useState('');
@@ -79,7 +83,10 @@ export default function TripDetail() {
   const [transportDepart, setTransportDepart] = useState(''); // 大交通起飞 yyyy-mm-ddTHH:mm
   const [transportArrive, setTransportArrive] = useState(''); // 大交通到达
   const [editingItem, setEditingItem] = useState<(ItineraryItem & { poi?: Poi }) | null>(null); // 修改弹窗
-  const [linkedTicket, setLinkedTicket] = useState<number | undefined>(undefined);
+  const [linkedTicketExpense, setLinkedTicketExpense] = useState<Expense | undefined>(undefined);
+  const [linkedExpense, setLinkedExpense] = useState<Expense | undefined>(undefined); // 非景点 item(酒店)的关联费用
+  const [editingTransport, setEditingTransport] = useState<Transport | null>(null); // 大交通修改弹窗
+  const num = (s: string) => (s === '' ? undefined : parseFloat(s));
   const [transportSeg, setTransportSeg] = useState<TransportSegmentType>('inter_city');
   const [routeInfo, setRouteInfo] = useState<{ durationMin: number; distanceM: number } | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -114,6 +121,7 @@ export default function TripDetail() {
     const allDays = await db.listDays(id);
     setDays(allDays);
     setSpent(await db.sumExpenses(id));
+    setExpenses(await db.listExpenses(id));
     setTransports(await db.listTransports(id));
 
     const summaries: Array<{ day: ItineraryDay; items: (ItineraryItem & { poi?: Poi; aiCard?: PoiAiCard })[] }> = [];
@@ -1075,26 +1083,53 @@ export default function TripDetail() {
     await load();
   };
 
-  /** 打开「修改」弹窗,并预取关联门票金额 */
+  /** 打开「修改」弹窗,按 item 类型预取关联记账(景点→门票,酒店→费用) */
   const openItemEdit = async (item: ItineraryItem) => {
     if (id) {
       const exps = await db.listExpenses(id);
-      const linked = exps.find((e) => e.refType === 'itinerary_item' && e.refId === item.id && e.category === 'ticket');
-      setLinkedTicket(linked?.amount);
+      if (item.itemType === 'poi') {
+        const linked = exps.find((e) => e.refType === 'itinerary_item' && e.refId === item.id && e.category === 'ticket');
+        setLinkedTicketExpense(linked);
+      } else {
+        const linked = exps.find((e) => e.refType === 'itinerary_item' && e.refId === item.id && e.category === 'hotel');
+        setLinkedExpense(linked);
+      }
     }
     setEditingItem(item);
   };
 
-  /** 保存「修改」:批量更新 item + 门票 + 更换景点 */
+  /** 保存「修改」:批量更新 item + 门票/费用 + 更换景点 */
   const handleSaveItemEdit = async (item: ItineraryItem, patch: EditPatch) => {
     if (!id || !trip) return;
     const { itemPatch, upsertPoi } = buildItemPatch(item, patch);
     if (upsertPoi) await db.upsertPoi(upsertPoi);
     await db.updateItem(item.id, itemPatch);
-    if (patch.ticket != null) {
-      const act = ticketAction(await db.listExpenses(id), item, patch.ticket, trip, days.find((d) => d.id === item.dayId)?.date);
-      if (act.kind === 'update') await db.updateExpense(act.id, { amount: act.amount });
-      else if (act.kind === 'add') await db.addExpense(act.exp);
+    if (item.itemType === 'poi') {
+      if (patch.ticket != null) {
+        const act = ticketAction(await db.listExpenses(id), item, patch.ticket, trip, days.find((d) => d.id === item.dayId)?.date, patch.ticketMeta);
+        if (act.kind === 'update') await db.updateExpense(act.id, act.patch);
+        else if (act.kind === 'add') await db.addExpense(act.exp);
+      }
+    } else if (patch.expense !== undefined) {
+      // 酒店等非景点 item:费用 upsert / 删除
+      const linked = (await db.listExpenses(id)).find((e) => e.refType === 'itinerary_item' && e.refId === item.id && e.category === 'hotel');
+      const ep = patch.expense;
+      if (ep === null) {
+        if (linked) await db.removeExpense(linked.id);
+      } else if (linked) {
+        const upd: Partial<Expense> = { amount: ep.amount };
+        if (ep.date) upd.date = ep.date;
+        if (ep.note) upd.note = ep.note;
+        await db.updateExpense(linked.id, upd);
+      } else {
+        const exp: Omit<Expense, 'id' | 'dirty'> = {
+          tripId: id, category: 'hotel', amount: ep.amount, currency: trip.currency ?? 'CNY',
+          refType: 'itinerary_item', refId: item.id, dayId: item.dayId,
+        };
+        if (ep.date) exp.date = ep.date;
+        if (ep.note) exp.note = ep.note;
+        await db.addExpense(exp);
+      }
     }
     await load();
     setEditingItem(null);
@@ -1140,18 +1175,32 @@ export default function TripDetail() {
     }
   };
 
-  /** 改大交通起抵时间 */
-  const handleEditTransportTime = async (t: Transport) => {
-    const depart = prompt('出发时间（yyyy-mm-ddTHH:mm）:', t.departAt.slice(0, 16));
-    if (depart === null) return;
-    const arrive = prompt('到达时间（yyyy-mm-ddTHH:mm）:', t.arriveAt.slice(0, 16));
-    if (arrive === null) return;
-    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(depart) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(arrive)) {
-      alert('时间格式错误，应为 yyyy-mm-ddTHH:mm'); return;
+  /** 保存大交通修改(起抵时间 + 费用) */
+  const handleSaveTransportEdit = async (t: Transport, patch: TransportEditPatch) => {
+    if (!id) return;
+    await db.updateTransport(t.id, { departAt: patch.departAt, arriveAt: patch.arriveAt });
+    const ep = patch.expense;
+    if (ep !== undefined) {
+      const linked = (await db.listExpenses(id)).find((e) => e.refType === 'transport' && e.refId === t.id && e.category === 'transport');
+      if (ep === null) {
+        if (linked) await db.removeExpense(linked.id);
+      } else if (linked) {
+        const upd: Partial<Expense> = { amount: ep.amount };
+        if (ep.date) upd.date = ep.date;
+        if (ep.note) upd.note = ep.note;
+        await db.updateExpense(linked.id, upd);
+      } else {
+        const exp: Omit<Expense, 'id' | 'dirty'> = {
+          tripId: id, category: 'transport', amount: ep.amount, currency: trip?.currency ?? 'CNY',
+          refType: 'transport', refId: t.id,
+        };
+        if (ep.date) exp.date = ep.date;
+        if (ep.note) exp.note = ep.note;
+        await db.addExpense(exp);
+      }
     }
-    if (depart >= arrive) { alert('到达时间必须晚于出发时间'); return; }
-    await db.updateTransport(t.id, { departAt: depart, arriveAt: arrive });
     await load();
+    setEditingTransport(null);
   };
 
   /** 删除大交通(含联动删除关联记账) */
@@ -1228,18 +1277,30 @@ export default function TripDetail() {
     const day = days.find((d) => d.id === activeDayId);
     await db.upsertPoi({ id: selectedScenic.id, name: selectedScenic.name, lng: selectedScenic.lng, lat: selectedScenic.lat, category: 'poi', address: selectedScenic.address });
     const item = await db.addItem({ dayId: activeDayId, poiId: selectedScenic.id, itemType: 'poi', transportMode: 'walk', note: selectedScenic.name, visitMinutes: scenicCard?.suggestDuration || 90 });
-    // V6.2 关联记账:门票价
-    const price = parseFloat(ticketPrice);
-    if (!isNaN(price) && price > 0 && day) {
+    // V6.2 关联记账:门票(人数/老人优惠,amount 恒为总额)
+    const hasTicket = ticketFields.count !== '' || ticketFields.unitPrice !== '' || ticketFields.seniorCount !== '' || ticketFields.seniorPrice !== '';
+    const tkAmount = hasTicket
+      ? ticketAmount({
+          count: num(ticketFields.count),
+          unitPrice: num(ticketFields.unitPrice),
+          seniorCount: num(ticketFields.seniorCount),
+          seniorPrice: num(ticketFields.seniorPrice),
+        })
+      : 0;
+    if (tkAmount > 0 && day) {
       await db.addExpense({
-        tripId: id, category: 'ticket', amount: price,
+        tripId: id, category: 'ticket', amount: tkAmount,
         currency: trip?.currency ?? 'CNY', date: day.date,
         note: `门票 · ${selectedScenic.name}`,
         refType: 'itinerary_item', refId: item.id, dayId: activeDayId,
+        ticketCount: num(ticketFields.count),
+        unitPrice: num(ticketFields.unitPrice),
+        seniorCount: num(ticketFields.seniorCount),
+        seniorPrice: num(ticketFields.seniorPrice),
       });
     }
     setSelectedScenic(null); setScenicCard(null); setScenicResults([]); setScenicKeyword('');
-    setTicketPrice('');
+    setTicketFields(emptyTicketFields());
     clearTempMarker(); await load();
     // 添加成功后自动关闭编辑面板
     setEditExpanded(prev => ({ ...prev, [activeDayId]: false }));
@@ -1575,10 +1636,10 @@ export default function TripDetail() {
                                 {it.itemType === 'hotel' && <span style={{ color: '#7ec8ff', fontSize: 11, marginLeft: 4 }}>🏨</span>}
                                 {it.itemType === 'transport' && <span style={{ color: '#ffa07a', fontSize: 11, marginLeft: 4 }}>🚗</span>}
                               </div>
-                              <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                              <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
                                 <button
                                   onClick={() => openItemEdit(it)}
-                                  title="修改名称/时长/门票/更换景点"
+                                  title="修改名称/时长/门票/费用/更换景点"
                                   style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#ddd', cursor: 'pointer' }}
                                 >修改</button>
                                 <button
@@ -1612,12 +1673,12 @@ export default function TripDetail() {
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {modeIcon(t.mode)} {t.fromPlace ?? ''}→{t.toPlace ?? ''} · {fmtDT(t.departAt)}→{fmtDT(t.arriveAt)}
                         </span>
-                        <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                        <span style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
                           <button
-                            onClick={() => handleEditTransportTime(t)}
-                            title="修改起抵时间"
+                            onClick={() => setEditingTransport(t)}
+                            title="修改起抵时间/费用"
                             style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#ddd', cursor: 'pointer' }}
-                          >⏱起抵</button>
+                          >修改</button>
                           <button
                             onClick={() => handleRemoveTransport(t)}
                             title="删除此交通"
@@ -1686,13 +1747,11 @@ export default function TripDetail() {
                           <div style={{ fontSize: 12, color: '#aaa', marginBottom: 8 }}>{selectedScenic.address} · {selectedScenic.lng.toFixed(4)}, {selectedScenic.lat.toFixed(4)}</div>
                           {scenicCardLoading ? <div style={{ fontSize: 12, color: '#888' }}>正在生成 AI 卡片…</div>
                             : scenicCard && <div style={{ fontSize: 12, marginBottom: 8 }}><div style={{ color: '#ffd166' }}>⭐ {scenicCard.rating} · {scenicCard.suggestDuration} min</div><div>{scenicCard.recommendReason}</div></div>}
-                          {/* V6.2 关联记账:门票价 */}
-                          <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                            <input type="number" placeholder="门票价(选填)" value={ticketPrice} onChange={(e) => setTicketPrice(e.target.value)} style={{ ...inp, width: '40%' }} />
-                          </div>
-                          <div style={{ display: 'flex', gap: 8 }}>
+                          {/* 门票(人数/老人优惠),选填 */}
+                          <TicketFields value={ticketFields} onChange={setTicketFields} />
+                          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                             <button style={btn()} onClick={handleAddScenic}>添加到 Day {d.daySeq}</button>
-                            <button onClick={() => { setSelectedScenic(null); setScenicCard(null); setTicketPrice(''); clearTempMarker(); }} style={{ ...btn('rgba(255,255,255,0.15)') }}>重新选择</button>
+                            <button onClick={() => { setSelectedScenic(null); setScenicCard(null); setTicketFields(emptyTicketFields()); clearTempMarker(); }} style={{ ...btn('rgba(255,255,255,0.15)') }}>重新选择</button>
                           </div>
                         </div>
                       )}
@@ -1956,7 +2015,8 @@ export default function TripDetail() {
       item={editingItem}
       defaultCity={trip?.destination ?? ''}
       currency={trip?.currency ?? 'CNY'}
-      linkedTicket={linkedTicket}
+      linkedTicketExpense={linkedTicketExpense}
+      linkedExpense={linkedExpense}
       isFirstStop={(() => {
         if (!editingItem) return false;
         const ds = daySummaries.find((s) => s.day.id === editingItem.dayId);
@@ -1967,6 +2027,17 @@ export default function TripDetail() {
       onCancel={() => setEditingItem(null)}
       onSave={(p) => (editingItem ? handleSaveItemEdit(editingItem, p) : Promise.resolve())}
     />
+
+    {/* 大交通修改弹窗(起抵时间 + 费用) */}
+    {editingTransport && trip && (
+      <TransportEditModal
+        transport={editingTransport}
+        trip={trip}
+        linkedExpense={expenses.find((e) => e.refType === 'transport' && e.refId === editingTransport.id && e.category === 'transport')}
+        onCancel={() => setEditingTransport(null)}
+        onSave={(p) => handleSaveTransportEdit(editingTransport, p)}
+      />
+    )}
 
     {/* V12 成员管理 */}
     {showMembers && (

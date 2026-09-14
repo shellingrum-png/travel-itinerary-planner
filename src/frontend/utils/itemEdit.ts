@@ -42,8 +42,27 @@ export function buildItemPatch(
   return { itemPatch };
 }
 
+/** 门票人数/老人优惠字段(全可选,amount 恒为总额) */
+export interface TicketMeta {
+  ticketCount?: number;
+  unitPrice?: number;
+  seniorCount?: number;
+  seniorPrice?: number;
+}
+
+/** 过滤 undefined,保证不把空 key 写进 expense */
+function ticketMetaPatch(meta?: TicketMeta): Partial<Expense> | undefined {
+  if (!meta) return undefined;
+  const out: Partial<Expense> = {};
+  (Object.keys(meta) as (keyof TicketMeta)[]).forEach((k) => {
+    const v = meta[k];
+    if (v !== undefined) out[k] = v;
+  });
+  return Object.keys(out).length ? out : undefined;
+}
+
 /**
- * 门票记账动作:找 item 关联的 ticket 记账,命中→改价,未命中→新增。
+ * 门票记账动作:找 item 关联的 ticket 记账,命中→改价(含人数/老人字段),未命中→新增。
  * amount 非法(<=0)→ 返回 none(调用方不处理)。
  */
 export function ticketAction(
@@ -52,10 +71,11 @@ export function ticketAction(
   amount: number,
   trip: Trip,
   date?: string,
-): { kind: 'update'; id: string; amount: number } | { kind: 'add'; exp: Omit<Expense, 'id' | 'dirty'> } | { kind: 'none' } {
+  meta?: TicketMeta,
+): { kind: 'update'; id: string; patch: Partial<Expense> } | { kind: 'add'; exp: Omit<Expense, 'id' | 'dirty'> } | { kind: 'none' } {
   if (isNaN(amount) || amount <= 0) return { kind: 'none' };
   const linked = expenses.find((e) => e.refType === 'itinerary_item' && e.refId === item.id && e.category === 'ticket');
-  if (linked) return { kind: 'update', id: linked.id, amount };
+  if (linked) return { kind: 'update', id: linked.id, patch: { amount, ...ticketMetaPatch(meta) } };
   return {
     kind: 'add',
     exp: {
@@ -68,6 +88,7 @@ export function ticketAction(
       refType: 'itinerary_item',
       refId: item.id,
       dayId: item.dayId,
+      ...ticketMetaPatch(meta),
     },
   };
 }
