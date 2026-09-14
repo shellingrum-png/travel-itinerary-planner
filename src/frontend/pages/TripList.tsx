@@ -3,9 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { db } from '../services/db';
 import type { Trip } from '../types';
 import CreateWizard from '../components/CreateWizard';
+import MemberModal from '../components/MemberModal';
 import { listBackedUpTrips, restoreTrip, reconcile, removeTripEverywhere } from '../services/sync';
 import { isAuthConfigured, signOut } from '../services/auth';
 import { C, btn, btnGhost, btnSmall, PageHeader, EmptyState } from '../components/ui';
+import { effectiveMembers } from '../utils/split';
 
 /** 更新时间格式:今天显示时刻,今年显示月日,更早显示年月日 */
 function fmtUpdatedAt(iso: string): string {
@@ -23,6 +25,7 @@ export default function TripList() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [showWizard, setShowWizard] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [memberTrip, setMemberTrip] = useState<Trip | null>(null);
   const navigate = useNavigate();
 
   const load = async () => {
@@ -126,6 +129,16 @@ export default function TripList() {
                 {t.updatedAt && (
                   <span style={{ color: '#6a6a80' }}> · 更新于 {fmtUpdatedAt(t.updatedAt)}</span>
                 )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setMemberTrip(t); }}
+                  title="管理同行成员(用于记账分摊)"
+                  style={{
+                    background: 'none', border: 'none', padding: 0, marginLeft: 6, cursor: 'pointer',
+                    color: '#7eb8e0', fontSize: 12, textDecoration: 'underline dotted',
+                  }}
+                >
+                  👥 {effectiveMembers(t).length} 人
+                </button>
                 {t.cityNodes && t.cityNodes.length > 0 && (
                   <div style={{ color: C.success, fontSize: 12, marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {t.cityNodes.map((c, i) => <span key={i}>🏨 {c.city} {c.nights}晚</span>)}
@@ -142,6 +155,14 @@ export default function TripList() {
 
       {trips.length === 0 && !showWizard && (
         <EmptyState>还没有旅程,点击上方按钮新建</EmptyState>
+      )}
+
+      {memberTrip && (
+        <MemberModal
+          trip={memberTrip}
+          onClose={() => setMemberTrip(null)}
+          onSaved={() => load()}
+        />
       )}
     </div>
   );

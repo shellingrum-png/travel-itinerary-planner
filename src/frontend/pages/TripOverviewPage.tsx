@@ -66,7 +66,8 @@ export default function TripOverviewPage() {
       <Link to={`/trip/${tripId}`} style={{ color: '#06d6a0', fontSize: 13, textDecoration: 'none' }}>&larr; 返回旅程</Link>
       <h1 style={{ fontSize: 24, fontWeight: 700 }}>数据概览</h1>
       <p style={{ color: '#9a9ab0', fontSize: 13, marginTop: 4 }}>
-        {trip.title} · {trip.startDate} ~ {trip.endDate} · {trip.companionCount}人
+        {trip.title} · {trip.startDate} ~ {trip.endDate} ·{' '}
+        {trip.members?.length ? trip.members.map((m) => m.name).join(' / ') : `${trip.companionCount}人`}
       </p>
 
       {/* 总花费 */}

@@ -14,9 +14,11 @@ import { loadAMap } from '../services/amapLoader';
 import { optimizeItinerary, estimateDayCapacity, estimateReachablePois, dayWindowMin, findReturnTransport, findDepartTransport } from '../services/itineraryEngine';
 import type { ItineraryPoi, DayAnchor } from '../services/itineraryEngine';
 import ItemEditModal, { type EditPatch } from '../components/ItemEditModal';
+import MemberModal from '../components/MemberModal';
 import { C } from '../components/ui';
 import { modeIcon, fmtDT, dayTransports, isBigTransportMode } from '../utils/transportFormat';
 import { buildItemPatch, ticketAction } from '../utils/itemEdit';
+import { effectiveMembers } from '../utils/split';
 import type { Trip, ItineraryDay, ItineraryItem, Poi, PoiAiCard, Hotel, TransportMode, Transport, TransportModeType, TransportSegmentType } from '../types';
 import { uuid } from '../utils/uuid';
 
@@ -44,6 +46,7 @@ export default function TripDetail() {
   const [spent, setSpent] = useState(0);
   const online = useOnlineStatus();
   const [transports, setTransports] = useState<Transport[]>([]); // 大交通表
+  const [showMembers, setShowMembers] = useState(false); // V12 成员管理弹窗
 
   // ── 编辑状态 ──
   const [activeDayId, setActiveDayId] = useState<string | null>(null);
@@ -965,6 +968,7 @@ export default function TripDetail() {
         currency: trip.currency,
         totalBudget: trip.totalBudget,
         cityNodes: trip.cityNodes,
+        members: trip.members,
       });
       const newDays = await db.listDays(newTrip.id);
 
@@ -1412,10 +1416,13 @@ export default function TripDetail() {
           )}
         </div>
 
-        {/* 工具行:调整/优化/记账/概览 统一样式平铺 */}
+        {/* 工具行:调整/优化/成员/记账/概览 统一样式平铺 */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
           <button onClick={handleAdjustDates} style={toolBtn}>调整日期</button>
           <button onClick={handleGlobalOptimize} style={toolBtn} title="跨天防折返优化,全程最短">顺路优化</button>
+          <button onClick={() => setShowMembers(true)} style={toolBtn} title="管理同行成员(记账分摊用)">
+            成员 {effectiveMembers(trip).length}
+          </button>
           <Link to={`/trip/${trip.id}/bookkeeping`} style={toolLink}>记账</Link>
           <Link to={`/trip/${trip.id}/overview`} style={toolLink}>概览</Link>
         </div>
@@ -1960,6 +1967,15 @@ export default function TripDetail() {
       onCancel={() => setEditingItem(null)}
       onSave={(p) => (editingItem ? handleSaveItemEdit(editingItem, p) : Promise.resolve())}
     />
+
+    {/* V12 成员管理 */}
+    {showMembers && (
+      <MemberModal
+        trip={trip}
+        onClose={() => setShowMembers(false)}
+        onSaved={() => load()}
+      />
+    )}
     </>
   );
 }

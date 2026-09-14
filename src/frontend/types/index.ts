@@ -15,6 +15,18 @@ export interface Trip {
   currency: string;
   cityNodes?: CityNode[]; // V6.0: 多城市节点分配
   updatedAt?: string;     // V9.0: 最近修改时间,用于云同步冲突合并(last-write-wins)
+  /**
+   * V12: 同行成员名单(用于分摊/按人查看)。
+   * 缺省(旧数据)时按 companionCount 生成匿名「人1…人N」兜底,
+   * 行为与改造前「总额 ÷ 总人数」完全一致。
+   */
+  members?: TripMember[];
+}
+
+/** V12 同行成员 */
+export interface TripMember {
+  id: string;
+  name: string;
 }
 
 export interface CityNode {
@@ -130,11 +142,22 @@ export type ExpenseCategory =
   | 'local_traffic'
   | 'other';
 
+/** V12 分摊方式:even=按人数均摊(默认,与旧行为一致);parts=按票种/份数明细 */
+export type SplitMode = 'even' | 'parts';
+
+/** V12 分摊明细行:如「普通票 3 张 × 100 元」;memberId 用于把某行绑定到具体成员 */
+export interface ExpensePart {
+  label: string;
+  units: number;      // 份数/张数
+  unitPrice: number;  // 单价
+  memberId?: string;  // 绑定到成员(选填);多个 units 全记到该成员名下
+}
+
 export interface Expense {
   id: string;
   tripId: string;
   category: ExpenseCategory;
-  amount: number;
+  amount: number;   // 总额(始终为总额,总计/预算口径不变)
   currency: string;
   paidBy?: string;
   date?: string;
@@ -143,6 +166,12 @@ export interface Expense {
   refType?: string; // V6.2 关联对象类型: poi | hotel | transport | itinerary_item
   refId?: string;   // V6.2 关联对象 id
   dayId?: string;   // V6.2 关联日程天 id
+  /** V12 分摊方式;缺省=even(旧数据全员均摊) */
+  splitMode?: SplitMode;
+  /** V12 parts 模式下的明细行 */
+  parts?: ExpensePart[];
+  /** V12 even 模式下参与分摊的成员 id;缺省=全体成员 */
+  participantIds?: string[];
 }
 
 // 路径规划缓存

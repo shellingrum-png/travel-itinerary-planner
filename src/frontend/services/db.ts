@@ -4,7 +4,7 @@
  * 迁移提示:后续 RN 端替换实现的 SQLite 实现,接口不变。
  * 已预留与 docs/DB_SCHEMA.md 一致的接口,迁移实现不影响业务层。
  */
-import type { Trip, ItineraryDay, ItineraryItem, Poi, Expense, RouteCache, PoiAiCard, Hotel, Transport, TripTemplate } from '../types';
+import type { Trip, TripMember, ItineraryDay, ItineraryItem, Poi, Expense, RouteCache, PoiAiCard, Hotel, Transport, TripTemplate } from '../types';
 
 export interface Db {
   // trips
@@ -15,6 +15,10 @@ export interface Db {
   touchTrip(tripId: string | undefined | null): Promise<void>;
   // 自动生成 itinerary_days(day_seq=1..N);id 缺省随机,恢复时可传原 id
   updateTrip(id: string, patch: Partial<Trip>): Promise<void>;
+  /** 恢复收尾:把 updatedAt 直接收敛到云端 savedAt(不写 now(),见实现注释) */
+  setSyncedAt(tripId: string, isoTs: string): Promise<void>;
+  /** V12:更新同行成员名单(分摊与按人查看的基础) */
+  updateTripMembers(tripId: string, members: TripMember[]): Promise<void>;
   deleteTrip(id: string): Promise<void>;
 
   // days

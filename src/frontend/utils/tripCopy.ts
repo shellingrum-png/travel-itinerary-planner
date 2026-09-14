@@ -69,6 +69,11 @@ export function remapExpenses(
     if (dayId !== undefined) out.dayId = dayId;
     if (refType !== undefined) out.refType = refType;
     if (refId !== undefined) out.refId = refId;
+    // V12 分摊信息随账目一起复制。
+    // memberId 不需要重映射:成员名单随 Trip 整体复制,id 保持一致。
+    if (e.splitMode !== undefined) out.splitMode = e.splitMode;
+    if (e.parts !== undefined) out.parts = e.parts;
+    if (e.participantIds !== undefined) out.participantIds = e.participantIds;
     return out;
   });
 }

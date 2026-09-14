@@ -93,6 +93,30 @@ describe('remapExpenses — 复制记账到新行程', () => {
     const [b] = remapExpenses([exp({})], 'new-trip', emptyMaps());
     expect('paidBy' in b).toBe(false);
   });
+
+  // V12:分摊信息必须随账目一起复制,否则新行程的分摊口径会退化成「全员均摊」
+  it('V12 分摊字段(splitMode/parts/participantIds)完整复制', () => {
+    const parts = [
+      { label: '普通票', units: 3, unitPrice: 100 },
+      { label: '老年票', units: 1, unitPrice: 50, memberId: 'mem-c' },
+    ];
+    const [out] = remapExpenses(
+      [exp({ amount: 350, splitMode: 'parts', parts, participantIds: ['mem-a', 'mem-b'] })],
+      'new-trip', emptyMaps(),
+    );
+    expect(out.splitMode).toBe('parts');
+    expect(out.parts).toEqual(parts);
+    expect(out.participantIds).toEqual(['mem-a', 'mem-b']);
+    // memberId 不需要重映射:成员名单随 Trip 整体复制,id 保持一致
+    expect(out.parts![1].memberId).toBe('mem-c');
+  });
+
+  it('V12 未设置分摊字段时不产生多余字段(旧数据复制后仍是旧数据)', () => {
+    const [out] = remapExpenses([exp({})], 'new-trip', emptyMaps());
+    expect('splitMode' in out).toBe(false);
+    expect('parts' in out).toBe(false);
+    expect('participantIds' in out).toBe(false);
+  });
 });
 
 describe('remapTransports — 复制大交通', () => {

@@ -5,6 +5,7 @@
  *          未命中用 haversine 直线距离兜底并标记 approx。
  */
 import { haversineKm } from './tsp';
+import { effectiveCount } from './split';
 import type { Trip, ItineraryDay, ItineraryItem, Poi, Hotel, Expense, RouteCache, Transport } from '../types';
 
 /** 路线缓存 key(与 amap.ts cacheKey 同格式,key = route_cache.id) */
@@ -62,7 +63,7 @@ export function computeTripOverview(input: OverviewInput): TripOverview {
   const totalSpend = expenses.reduce((s, e) => s + e.amount, 0);
   const spendByCategory: Record<string, number> = {};
   for (const e of expenses) spendByCategory[e.category] = (spendByCategory[e.category] || 0) + e.amount;
-  const perCapita = totalSpend / Math.max(1, trip.companionCount || 1);
+  const perCapita = totalSpend / Math.max(1, effectiveCount(trip));
 
   const dayStats: DayStats[] = days
     .slice()

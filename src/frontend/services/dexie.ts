@@ -15,6 +15,7 @@ import type {
   Hotel,
   Transport,
   TripTemplate,
+  TripMember,
 } from '../types';
 import type { Db } from './db';
 import { uuid } from '../utils/uuid';
@@ -122,6 +123,39 @@ export class TravelDb extends Dexie implements Db {
 
   async updateTrip(id: string, patch: Partial<Trip>): Promise<void> {
     await this.trips.update(id, { ...patch, updatedAt: new Date().toISOString() });
+  }
+
+  /**
+   * 把本地 updatedAt 直接收敛到云端快照的 savedAt(= 云端 updated_at)。
+   *
+   * 与 updateTrip 的区别:**不写 now()**,而是写调用方给的时间戳。仅用于
+   * 「刚从云端恢复」的收尾 —— 此时本地的 updatedAt 已被恢复流程中
+   * days/items/expenses/... 的 touchTrip() 顶成了 now(),是**假更新**
+   * (用户并没有改内容),必须抹掉,否则:
+   *   localTs > cloudTs → 下一轮 reconcile 判定「本地更新」→ 把刚恢复的内容
+   *   又推回云端,列表「更新于」被刷成"你打开页面的时间"。
+   */
+  async setSyncedAt(tripId: string, isoTs: string): Promise<void> {
+    if (!tripId || !isoTs) return;
+    try {
+      if (!(await this.trips.get(tripId))) return;
+      await this.trips.update(tripId, { updatedAt: isoTs });
+    } catch { /* trip 可能已删除,忽略 */ }
+  }
+
+  /**
+   * V12:更新同行成员名单。
+   *
+   * 同时把 companionCount 对齐为名单人数 —— 两处口径若不一致,旧代码路径
+   * (向导/概览等仍在读 companionCount 的地方)会显示过时的人数。
+   * 被移除成员的历史记账里 participantIds/parts.memberId 会留下悬空引用 ——
+   * 由 utils/split.ts 兜底(未知成员退回全员分摊),不在这里清理,
+   * 因为「删成员」不应连带改动账目金额口径。
+   */
+  async updateTripMembers(tripId: string, members: TripMember[]): Promise<void> {
+    const safe = members.filter((m) => m && m.id && m.name.trim());
+    if (safe.length === 0) return; // 不允许出现 0 人(会除零)
+    await this.updateTrip(tripId, { members: safe, companionCount: safe.length });
   }
 
   async deleteTrip(id: string): Promise<void> {

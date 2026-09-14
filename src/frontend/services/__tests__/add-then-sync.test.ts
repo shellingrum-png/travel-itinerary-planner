@@ -103,4 +103,42 @@ describe('添加数据后同步不应覆盖（回归）', () => {
 
     await db.deleteTrip(trip.id);
   });
+
+  // 回归：恢复流程会把 days/items/... 逐个写回，每次写入都 touchTrip() 顶成 now()，
+  // 于是 localTs 恒大于云端 savedAt → 下次 reconcile 判定「本地更新」→ 把刚恢复的
+  // 内容又推回云端，列表「更新于」被刷成打开页面的时刻（用户什么都没改却显示"今天更新"）。
+  // 修复：恢复收尾 setSyncedAt 把本地对齐回 savedAt。
+  it('恢复云端旅程后，updatedAt 应等于云端 savedAt，且不再回推', async () => {
+    const trip = await db.createTrip({
+      title: '远端行程', destination: 'z',
+      startDate: '2026-09-25', endDate: '2026-09-25',
+      companionCount: 2, currency: 'CNY', totalBudget: 0,
+    });
+    await backupTrip(trip.id); // 先把这条推上"云端"
+
+    // 模拟「换设备/删了本地」：删掉本地，只留云端
+    await db.deleteTrip(trip.id);
+    expect(await db.getTrip(trip.id)).toBeNull();
+
+    // 记录云端 savedAt（reconcile 会据此恢复）
+    const savedAt = cloudUpdatedAt;
+    let putCount = 0;
+    const origFetch = globalThis.fetch as any;
+    vi.stubGlobal('fetch', vi.fn(async (url: string, opts?: any) => {
+      if (opts?.method === 'PUT') putCount++;
+      return origFetch(url, opts);
+    }));
+
+    await reconcile(); // 云端有、本地无 → restoreTrip
+
+    const restored = await db.getTrip(trip.id);
+    expect(restored, '恢复失败').not.toBeNull();
+    // 关键：恢复完的时间戳必须精确等于云端 savedAt，不能是"现在"
+    expect(restored!.updatedAt).toBe(savedAt);
+    // 且这一轮 reconcile 不应产生任何 PUT（内容一致，无需回推）
+    expect(putCount, '恢复后又把内容推回云端（回环未断）').toBe(0);
+
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', origFetch);
+  });
 });

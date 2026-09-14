@@ -142,9 +142,11 @@ export async function restoreTrip(tripId: string): Promise<boolean> {
       startDate: snap.trip.startDate, endDate: snap.trip.endDate,
       companionCount: snap.trip.companionCount, currency: snap.trip.currency,
       totalBudget: snap.trip.totalBudget, cityNodes: snap.trip.cityNodes,
+      members: snap.trip.members,
     }, tripId);
-    // 恢复状态与更新时刻(createTrip 默认 planning)
-    await db.updateTrip(tripId, { status: snap.trip.status, updatedAt: snap.trip.updatedAt });
+    // 只恢复状态(updatedAt 不在这里写 —— 恢复流程里的写操作会 touchTrip 顶成 now(),
+    // 故统一在收尾用 setSyncedAt 对齐,见函数末尾)
+    await db.updateTrip(tripId, { status: snap.trip.status });
 
     // 写回 days(注意 createTrip 已生成同样多的天,需按 daySeq 对齐)
     const newDays = await db.listDays(tripId);
@@ -167,9 +169,14 @@ export async function restoreTrip(tripId: string): Promise<boolean> {
     }
     for (const h of snap.hotels) await db.addHotel({ tripId, name: h.name, address: h.address, lng: h.lng, lat: h.lat, checkIn: h.checkIn, checkOut: h.checkOut, checkInTime: h.checkInTime, checkOutTime: h.checkOutTime, poiId: h.poiId });
     for (const t of snap.transports) await db.addTransport({ tripId, segType: t.segType, mode: t.mode, fromPlace: t.fromPlace, toPlace: t.toPlace, departAt: t.departAt, arriveAt: t.arriveAt, flightNo: t.flightNo, trainNo: t.trainNo });
-    for (const e of snap.expenses) await db.addExpense({ tripId, category: e.category, amount: e.amount, currency: e.currency, paidBy: e.paidBy, date: e.date, note: e.note, refType: e.refType, refId: e.refId, dayId: e.dayId });
+    for (const e of snap.expenses) await db.addExpense({ tripId, category: e.category, amount: e.amount, currency: e.currency, paidBy: e.paidBy, date: e.date, note: e.note, refType: e.refType, refId: e.refId, dayId: e.dayId, splitMode: e.splitMode, parts: e.parts, participantIds: e.participantIds });
     // 写回 AI 卡片
     for (const c of snap.aiCards) await db.upsertPoiCard(c);
+    // ⚠️ 收尾对齐:上面的每一次写入都会 touchTrip() 把 updatedAt 顶成 now(),
+    // 若不抹平,localTs 恒大于云端 updated_at(= savedAt)→ 下次 reconcile 判定
+    // 「本地更新」→ 把刚恢复的内容又推回云端,列表「更新于」被刷成打开页面的时刻。
+    // 对齐到 savedAt 后两边相等,reconcile 判定一致即跳过,不再空转上传。
+    await db.setSyncedAt(tripId, snap.savedAt);
     return true;
   } catch (e) {
     console.warn('[sync] 恢复失败:', e);
