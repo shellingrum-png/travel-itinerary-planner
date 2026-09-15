@@ -22,6 +22,9 @@ const CATEGORIES: { value: ExpenseCategory; label: string }[] = [
 /** 分摊方式(「仅部分人」在数据上与 even 相同,只是默认不勾选参与人) */
 type SplitUi = 'all' | 'parts' | 'some';
 
+/** 今天的 yyyy-mm-dd */
+const todayISO = () => new Date().toISOString().slice(0, 10);
+
 interface DraftPart { label: string; units: string; unitPrice: string; memberId: string }
 
 const emptyPart = (): DraftPart => ({ label: '', units: '1', unitPrice: '', memberId: '' });
@@ -35,10 +38,9 @@ export default function Bookkeeping() {
   const [amount, setAmount] = useState('');
   const [category, setCategory] = useState<ExpenseCategory>('food');
   const [note, setNote] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayISO());
   const [paidBy, setPaidBy] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [perCapitaMode, setPerCapitaMode] = useState<'perSpent' | 'perRemain'>('perSpent');
   // V12 分摊
   const [splitUi, setSplitUi] = useState<SplitUi>('all');
   const [participants, setParticipants] = useState<string[]>([]);
@@ -55,6 +57,9 @@ export default function Bookkeeping() {
     setTrip(t);
     if (t) {
       setExpenses(await db.listExpenses(tripId));
+      // 新增记账的日期默认取行程首日,而不是「今天」
+      // (今天往往早于/晚于行程,记一笔默认落到区间外的日期不直观)
+      setDate((cur) => (cur === todayISO() ? t.startDate || cur : cur));
     }
   };
 
@@ -74,15 +79,10 @@ export default function Bookkeeping() {
     if (focusMemberId && !ids.has(focusMemberId)) setFocusMemberId(null);
   }, [members, focusMemberId]);
 
-  const totalBudget = trip?.totalBudget ?? 0;
   const count = members.length;
   const spent = expenses.reduce((s, e) => s + e.amount, 0);
-  const remain = Math.max(0, totalBudget - spent);
   // 人均:全部视图 = 总额/人数;按人视图 = 该成员应分摊
-  const perCapita = focus
-    ? focus.share
-    : (perCapitaMode === 'perSpent' ? spent : remain) / Math.max(1, count);
-  const overBudget = totalBudget > 0 && spent > totalBudget;
+  const perCapita = focus ? focus.share : spent / Math.max(1, count);
 
   // 按人过滤:选中成员时只显示 TA 参与的账
   const visibleExpenses = focusMemberId
@@ -111,6 +111,7 @@ export default function Bookkeeping() {
     setAmount(''); setNote(''); setPaidBy(''); setError(null);
     setSplitUi('all'); setParticipants([]); setDraftParts([emptyPart()]);
     setEditId(null); setTicketFields(emptyTicketFields());
+    setDate(trip?.startDate || todayISO()); // 回到行程首日(而非今天)
   };
 
   /** 打开编辑:预填所有表单字段(含分摊/门票) */
@@ -119,7 +120,7 @@ export default function Bookkeeping() {
     setAmount(String(e.amount));
     setCategory(e.category);
     setNote(e.note ?? '');
-    setDate(e.date ?? new Date().toISOString().slice(0, 10));
+    setDate(e.date ?? todayISO());
     setPaidBy(e.paidBy ?? '');
     setSplitUi(e.splitMode === 'parts' ? 'parts' : e.participantIds && e.participantIds.length ? 'some' : 'all');
     setParticipants(e.participantIds ?? []);
@@ -234,55 +235,35 @@ export default function Bookkeeping() {
         ))}
       </div>
 
-      {/* 预算条 */}
-      {(totalBudget > 0 || focus) && (
-        <div style={{
-          marginBottom: 20,
-          padding: 16,
-          borderRadius: 12,
-          background: overBudget ? 'rgba(255,107,107,0.08)' : 'rgba(6,214,160,0.06)',
-          border: overBudget ? '1px solid rgba(255,107,107,0.4)' : '1px solid rgba(255,255,255,0.1)',
-        }}>
-          {focus ? (
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: 15 }}>
-              <span>{focus.member.name} 应分摊</span>
-              <span style={{ color: C.warning }}>¥{focus.share.toFixed(0)}</span>
-              <span style={{ color: '#9a9ab0', fontWeight: 400, fontSize: 13 }}>参与 {focus.count} 笔 · 涉额 ¥{focus.spend.toFixed(0)}</span>
-            </div>
-          ) : (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: 15 }}>
-                <span>已花 <span style={{ color: C.warning }}>¥{spent.toFixed(0)}</span></span>
-                <span>预算 ¥{totalBudget.toFixed(0)}</span>
-                <span style={{ color: overBudget ? C.danger : C.success }}>
-                  剩余 ¥{remain.toFixed(0)}
-                </span>
-              </div>
-              {totalBudget > 0 && (
-                <div style={{ marginTop: 10, height: 8, background: 'rgba(255,255,255,0.1)', borderRadius: 4, overflow: 'hidden' }}>
-                  <div style={{
-                    height: '100%',
-                    width: `${Math.min(100, (spent / totalBudget) * 100)}%`,
-                    background: overBudget ? C.danger : C.success,
-                    borderRadius: 4,
-                    transition: 'width 0.3s',
-                  }} />
-                </div>
-              )}
-              {overBudget && <div style={{ color: C.danger, marginTop: 6, fontWeight: 'bold', fontSize: 13 }}>预算已超额!</div>}
-              <div style={{ marginTop: 10, fontSize: 13, color: '#9a9ab0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>
-                  {perCapitaMode === 'perSpent' ? '人均已花' : '人均剩余'} <strong style={{ color: '#e8e8f0' }}>¥{perCapita.toFixed(0)}</strong>
-                  {' '}({count}人)
-                </span>
-                <button onClick={() => setPerCapitaMode(perCapitaMode === 'perSpent' ? 'perRemain' : 'perSpent')} style={{ fontSize: 12, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.08)', cursor: 'pointer', color: C.info, borderRadius: 6, padding: '4px 10px' }}>
-                  切换
-                </button>
-              </div>
-            </>
-          )}
+      {/* 总花费 + 按人查看时的成员汇总 */}
+      <div style={{
+        marginBottom: 20,
+        padding: '12px 16px',
+        borderRadius: 12,
+        background: 'rgba(255,255,255,0.04)',
+        border: '1px solid rgba(255,255,255,0.1)',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+      }}>
+        <div>
+          <div style={{ fontSize: 12, color: '#9a9ab0' }}>总花费</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: C.warning }}>¥{spent.toFixed(0)}</div>
         </div>
-      )}
+        {focus && (
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 12, color: '#9a9ab0' }}>{focus.member.name} 应分摊</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: C.warning }}>¥{focus.share.toFixed(0)}</div>
+            <div style={{ fontSize: 11, color: '#9a9ab0' }}>参与 {focus.count} 笔 · 涉额 ¥{focus.spend.toFixed(0)}</div>
+          </div>
+        )}
+        {!focus && count > 1 && (
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 12, color: '#9a9ab0' }}>人均</div>
+            <div style={{ fontSize: 18, fontWeight: 600 }}>¥{perCapita.toFixed(0)}</div>
+          </div>
+        )}
+      </div>
 
       {/* 消费列表 */}
       <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 12 }}>

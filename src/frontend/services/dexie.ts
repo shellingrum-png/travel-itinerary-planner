@@ -106,17 +106,17 @@ export class TravelDb extends Dexie implements Db {
     } catch { /* trip 可能已删除,忽略 */ }
   }
 
-  /** 新增旅程;id 缺省随机生成,恢复时传原 id 保持本地=云端一致 */
-  async createTrip(input: Omit<Trip, 'id' | 'status'>, id?: string): Promise<Trip> {
+  /** 新增旅程;id 缺省随机生成。恢复时传原 id 保持本地=云端一致;传 days 则直接使用给定天数(保持 day.id) */
+  async createTrip(input: Omit<Trip, 'id' | 'status'>, id?: string, days?: ItineraryDay[]): Promise<Trip> {
     const tripId = id || uuid();
     const now = new Date().toISOString();
     const trip: Trip = { ...input, id: tripId, status: 'planning', updatedAt: now };
-    const days = generateDays(trip.startDate, trip.endDate);
+    const dayRows = days && days.length
+      ? days.map((d) => ({ ...d, tripId }))
+      : generateDays(trip.startDate, trip.endDate).map((d) => ({ ...d, tripId }));
     await this.transaction('rw', this.trips, this.itineraryDays, async () => {
       await this.trips.add(trip);
-      await this.itineraryDays.bulkAdd(
-        days.map((d) => ({ ...d, tripId })),
-      );
+      await this.itineraryDays.bulkAdd(dayRows);
     });
     return trip;
   }
@@ -195,13 +195,13 @@ export class TravelDb extends Dexie implements Db {
     await this.touchTrip(await this.tripIdByDay(dayId));
   }
 
-  /** V5.0:在指定日期前插入一天,daySeq 自动重排 */
-  async addDay(tripId: string, date: string): Promise<ItineraryDay> {
+  /** V5.0:在指定日期前插入一天,daySeq 自动重排;恢复时可传原 id */
+  async addDay(tripId: string, date: string, id?: string): Promise<ItineraryDay> {
     const days = await this.itineraryDays.where({ tripId }).sortBy('daySeq');
     const insertIdx = days.findIndex(d => d.date > date);
-    const id = uuid();
+    const newId = id || uuid();
     const newDay: ItineraryDay = {
-      id, tripId, daySeq: 0, date,
+      id: newId, tripId, daySeq: 0, date,
     };
 
     if (insertIdx === -1) {
@@ -250,10 +250,11 @@ export class TravelDb extends Dexie implements Db {
     return this.itineraryItems.where({ dayId }).sortBy('orderSeq');
   }
 
-  async addItem(item: Omit<ItineraryItem, 'id' | 'orderSeq'>): Promise<ItineraryItem> {
-    const id = uuid();
-    const max = await this.itineraryItems.where({ dayId: item.dayId }).count();
-    const created: ItineraryItem = { ...item, id, orderSeq: max };
+  async addItem(item: Omit<ItineraryItem, 'id' | 'orderSeq'> & { orderSeq?: number }, id?: string): Promise<ItineraryItem> {
+    const newId = id || uuid();
+    // orderSeq 缺省补到末尾;显式传入(恢复时)则原样保留,避免顺序错乱
+    const orderSeq = item.orderSeq ?? await this.itineraryItems.where({ dayId: item.dayId }).count();
+    const created: ItineraryItem = { ...item, id: newId, orderSeq };
     await this.itineraryItems.add(created);
     await this.touchTrip(await this.tripIdByDay(item.dayId));
     return created;
@@ -346,9 +347,9 @@ export class TravelDb extends Dexie implements Db {
     return this.expenses.where({ tripId }).sortBy('date');
   }
 
-  async addExpense(exp: Omit<Expense, 'id' | 'dirty'>): Promise<Expense> {
-    const id = uuid();
-    const created: Expense = { ...exp, id, dirty: 0 };
+  async addExpense(exp: Omit<Expense, 'id' | 'dirty'> & { dirty?: 0 | 1 }, id?: string): Promise<Expense> {
+    const newId = id || uuid();
+    const created: Expense = { ...exp, id: newId, dirty: exp.dirty ?? 0 };
     await this.expenses.add(created);
     await this.touchTrip(exp.tripId);
     return created;
@@ -387,6 +388,26 @@ export class TravelDb extends Dexie implements Db {
 
   async listRouteCache(): Promise<RouteCache[]> {
     return this.routeCache.toArray();
+  }
+
+  /**
+   * 批量写入路线缓存(分享页用:把主账号已算好的真实里程随快照带过来,
+   * 家人端免于冷启动重算、也就不会因高德首次加载超时而退回直线近似)。
+   * 本地已有且未过期的条目跳过,不覆盖更新的本地数据。
+   * @returns 实际写入条数
+   */
+  async seedRouteCache(entries: RouteCache[]): Promise<number> {
+    let n = 0;
+    for (const e of entries) {
+      const exist = await this.routeCache.get(e.id);
+      if (exist) {
+        const age = Date.now() - new Date(exist.fetchedAt).getTime();
+        if (age <= (exist.ttlDays ?? 30) * 86400_000) continue;
+      }
+      await this.routeCache.put(e);
+      n++;
+    }
+    return n;
   }
 
   async upsertRouteCache(entry: {
@@ -432,9 +453,9 @@ export class TravelDb extends Dexie implements Db {
     return this.hotels.where({ tripId }).toArray();
   }
 
-  async addHotel(hotel: Omit<Hotel, 'id'>): Promise<Hotel> {
-    const id = uuid();
-    const created: Hotel = { ...hotel, id };
+  async addHotel(hotel: Omit<Hotel, 'id'>, id?: string): Promise<Hotel> {
+    const newId = id || uuid();
+    const created: Hotel = { ...hotel, id: newId };
     await this.hotels.add(created);
     await this.touchTrip(hotel.tripId);
     return created;
@@ -458,9 +479,9 @@ export class TravelDb extends Dexie implements Db {
     return this.transports.where({ tripId }).toArray();
   }
 
-  async addTransport(transport: Omit<Transport, 'id'>): Promise<Transport> {
-    const id = uuid();
-    const created: Transport = { ...transport, id };
+  async addTransport(transport: Omit<Transport, 'id'>, id?: string): Promise<Transport> {
+    const newId = id || uuid();
+    const created: Transport = { ...transport, id: newId };
     await this.transports.add(created);
     await this.touchTrip(transport.tripId);
     return created;
@@ -570,13 +591,33 @@ export function getActiveDb(): TravelDb {
 /** 已打开过的库,切回时复用避免重复 open */
 const openedDbs = new Map<string, TravelDb>();
 
+// 串行化 setActiveDb 的调用链。
+// 页面加载时 Supabase auth 会连发多个事件(INITIAL_SESSION / SIGNED_IN …),
+// 并发调用会在「关旧库 / 设新库」之间交错:一个调用把 activeDb 设成新库后,
+// 另一个调用的 `activeDb.close()` 关掉的正是这个新库 → 整个库被关,
+// 后续所有查询报 DatabaseClosedError(表现为「1 个旅程同步失败」红条)。
+let setActiveDbChain: Promise<void> = Promise.resolve();
+
 /**
- * 切换当前活动数据库(登录/登出时调用)。
- * 打开失败时退回独立库,保证不误用其他账号的数据。
+ * 切换当前活动数据库(登录/登出时调用)。串行执行,避免并发竞态。
  */
-export async function setActiveDb(userId: string | null | undefined): Promise<void> {
+export function setActiveDb(userId: string | null | undefined): Promise<void> {
+  const next = setActiveDbChain.then(() => doSetActiveDb(userId)).catch((e) => {
+    console.warn('[db] setActiveDb 失败:', e);
+  });
+  setActiveDbChain = next;
+  return next;
+}
+
+async function doSetActiveDb(userId: string | null | undefined): Promise<void> {
   const name = dbNameForUser(userId);
-  if (activeDb.name === name) return;
+  if (activeDb.name === name) {
+    // 同库:可能此前被误关过,确保处于打开状态;否则后续查询全报 DatabaseClosedError
+    if (!activeDb.isOpen()) {
+      try { await activeDb.open(); } catch (e) { console.warn(`[db] 重新打开 ${name} 失败`, e); }
+    }
+    return;
+  }
 
   let next = openedDbs.get(name);
   try {
@@ -591,10 +632,13 @@ export async function setActiveDb(userId: string | null | undefined): Promise<vo
     next = new TravelDb(dbNameForUser(null));
   }
 
-  // 关掉旧库(不再需要它持有连接;数据仍在 IndexedDB 中,切回时会重新打开)
-  try { activeDb.close(); } catch { /* ignore */ }
-
+  // 先切换正确引用,再关「被替换掉的旧库」;且绝不能关到新库本身
+  // (并发下 activeDb 可能已被换走,用捕获的 prev 保证只关真正被替换的那个)
+  const prev = activeDb;
   activeDb = next;
+  if (prev && prev !== next) {
+    try { prev.close(); } catch { /* ignore */ }
+  }
 }
 
 /**

@@ -6,7 +6,8 @@
  */
 import { haversineKm } from './tsp';
 import { effectiveCount } from './split';
-import type { Trip, ItineraryDay, ItineraryItem, Poi, Hotel, Expense, RouteCache, Transport } from '../types';
+import { resolveMode, isExplicitTransportMode } from './segments';
+import type { Trip, ItineraryDay, ItineraryItem, Poi, Hotel, Expense, RouteCache, Transport, TransportMode } from '../types';
 
 /** 路线缓存 key(与 amap.ts cacheKey 同格式,key = route_cache.id) */
 export function routeCacheKey(lng1: number, lat1: number, lng2: number, lat2: number, mode: string): string {
@@ -92,26 +93,33 @@ export function computeTripOverview(input: OverviewInput): TripOverview {
         if (poi) dayPois.push({ name: poi.name, category: poi.category || 'poi' });
       }
 
-      // ── 每天开车公里:顺序遍历带坐标节点(hotel 锚点 + poi),相邻 drive 段求和 ──
+      // ── 每天开车公里:顺序遍历带坐标节点(poi),相邻 drive 段求和 ──
+      // 交通方式必须经 resolveMode 按距离修正:历史/模板数据里 transportMode 普遍是
+      // 'walk'(字段默认值=未指定),若直接判断会几乎全部跳过 → 公里数恒为 0。
       let driveKm = 0;
       let driveKmApprox = false;
-      const nodes: { lng: number; lat: number; mode?: string }[] = [];
+      const nodes: { lng: number; lat: number; mode: TransportMode; explicit: boolean }[] = [];
       for (const it of items) {
         if (it.itemType === 'transport' || it.itemType === 'buffer') continue;
         const poi = it.poiId ? poiById.get(it.poiId) : undefined;
         if (!poi) continue;
-        nodes.push({ lng: poi.lng, lat: poi.lat, mode: it.transportMode });
+        nodes.push({
+          lng: poi.lng, lat: poi.lat,
+          mode: it.transportMode,
+          explicit: isExplicitTransportMode(it.transportMode, it.transportModeSet),
+        });
       }
       for (let i = 1; i < nodes.length; i++) {
         const prev = nodes[i - 1];
         const cur = nodes[i];
-        if (cur.mode !== 'drive') continue;
+        const straightKm = haversineKm(prev.lng, prev.lat, cur.lng, cur.lat);
+        if (resolveMode(cur.mode, straightKm, cur.explicit) !== 'drive') continue;
         const key = routeCacheKey(prev.lng, prev.lat, cur.lng, cur.lat, 'drive');
         const dist = routeDistanceById.get(key);
         if (typeof dist === 'number') {
           driveKm += dist / 1000;
         } else {
-          driveKm += haversineKm(prev.lng, prev.lat, cur.lng, cur.lat);
+          driveKm += straightKm;
           driveKmApprox = true;
         }
       }

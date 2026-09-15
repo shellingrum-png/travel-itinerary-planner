@@ -10,7 +10,7 @@ export interface Db {
   // trips
   listTrips(): Promise<Trip[]>;
   getTrip(id: string): Promise<Trip | null>;
-  createTrip(input: Omit<Trip, 'id' | 'status'>, id?: string): Promise<Trip>;
+  createTrip(input: Omit<Trip, 'id' | 'status'>, id?: string, days?: ItineraryDay[]): Promise<Trip>;
   /** 触碰旅程 updatedAt(所有内容变更必须调用,否则云端会覆盖本地) */
   touchTrip(tripId: string | undefined | null): Promise<void>;
   // 自动生成 itinerary_days(day_seq=1..N);id 缺省随机,恢复时可传原 id
@@ -29,7 +29,7 @@ export interface Db {
 
   // items(时间轴节点)
   listItems(dayId: string): Promise<ItineraryItem[]>;
-  addItem(item: Omit<ItineraryItem, 'id' | 'orderSeq'>): Promise<ItineraryItem>;
+  addItem(item: Omit<ItineraryItem, 'id' | 'orderSeq'> & { orderSeq?: number }, id?: string): Promise<ItineraryItem>;
   updateItem(id: string, patch: Partial<ItineraryItem>): Promise<void>;
   moveItem(dayId: string, itemId: string, newOrder: number): Promise<void>;
   /** V6.2 拖拽:跨天移动(item 从原天删,插入目标天指定位置) */
@@ -43,7 +43,7 @@ export interface Db {
 
   // expenses
   listExpenses(tripId: string): Promise<Expense[]>;
-  addExpense(exp: Omit<Expense, 'id' | 'dirty'>): Promise<Expense>;
+  addExpense(exp: Omit<Expense, 'id' | 'dirty'> & { dirty?: 0 | 1 }, id?: string): Promise<Expense>;
   updateExpense(id: string, patch: Partial<Expense>): Promise<void>;
   removeExpense(id: string): Promise<void>;
   /** 已花合计(按币种汇总,V1 单币种) */
@@ -70,13 +70,13 @@ export interface Db {
 
   // hotels
   listHotels(tripId: string): Promise<Hotel[]>;
-  addHotel(hotel: Omit<Hotel, 'id'>): Promise<Hotel>;
+  addHotel(hotel: Omit<Hotel, 'id'>, id?: string): Promise<Hotel>;
   updateHotel(id: string, patch: Partial<Hotel>): Promise<void>;
   removeHotel(id: string): Promise<void>;
 
   // transports
   listTransports(tripId: string): Promise<Transport[]>;
-  addTransport(transport: Omit<Transport, 'id'>): Promise<Transport>;
+  addTransport(transport: Omit<Transport, 'id'>, id?: string): Promise<Transport>;
   updateTransport(id: string, patch: Partial<Transport>): Promise<void>;
   removeTransport(id: string): Promise<void>;
 
@@ -85,7 +85,7 @@ export interface Db {
   setSetting(key: string, value: string): Promise<void>;
 
   // days (new for V5.0)
-  addDay(tripId: string, date: string): Promise<ItineraryDay>;
+  addDay(tripId: string, date: string, id?: string): Promise<ItineraryDay>;
   removeDay(dayId: string): Promise<void>;
 
   // V6.0 templates

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, useLocation } from 'react-router-dom';
 import TripList from './pages/TripList';
 import TripDetail from './pages/TripDetail';
 import DayTimeline from './pages/DayTimeline';
@@ -11,6 +11,7 @@ import TransportPage from './pages/TransportPage';
 import HotelsPage from './pages/HotelsPage';
 import OptimizePage from './pages/OptimizePage';
 import TripOverviewPage from './pages/TripOverviewPage';
+import ShareView from './pages/ShareView';
 import AuthPage from './pages/AuthPage';
 import { onAuthStateChange, isAuthConfigured } from './services/auth';
 import { setActiveDb, migrateLegacyDb } from './services/db';
@@ -19,6 +20,9 @@ export default function App() {
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
   const [booting, setBooting] = useState(true);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const location = useLocation();
+  // 分享页免登录:家人凭 token 访问,不经过整站登录门
+  const isShare = location.pathname.startsWith('/share');
 
   const handleUser = async (u: { id: string; email?: string } | null) => {
     // 先切库再更新用户态,避免组件在这中间读到上一个账号的数据
@@ -28,13 +32,22 @@ export default function App() {
       // 老版本把数据存在单库里,首次登录时整体迁移过去,避免历史数据"消失"
       await migrateLegacyDb(u.id);
       try {
-        const { reconcile } = await import('./services/sync');
+        const { reconcile, healAllLocalTrips } = await import('./services/sync');
         const r = await reconcile();
         if (r.failed > 0) {
-          setSyncError(`${r.failed} 个旅程同步失败,数据仅保存在本机。请检查网络后重新打开页面。`);
+          // 带上具体旅程与原因,便于定位(此前只报「N 个失败」不知道是哪个)
+          const detail = r.failures
+            .map((f) => `${f.tripId.slice(0, 8)}(${f.action === 'push' ? '上传' : '下载'}): ${f.message}`)
+            .join(';');
+          setSyncError(`${r.failed} 个旅程同步失败,数据仅保存在本机。原因:${detail.slice(0, 300)}`);
         } else {
           setSyncError(null);
         }
+        // 修复历史遗留的账单引用断链(幂等,有修复才回传云端)
+        try {
+          const healed = await healAllLocalTrips();
+          if (healed > 0) console.log(`[sync] 已自愈并回传 ${healed} 个旅程的账单引用`);
+        } catch { /* 自愈失败不影响使用 */ }
       } catch (e: any) {
         setSyncError(`云端同步失败:${e?.message || '未知错误'}。数据仍保存在本机。`);
       }
@@ -68,7 +81,7 @@ export default function App() {
     return () => sub.unsubscribe();
   }, []);
 
-  if (booting) return <div style={{ textAlign: 'center', color: '#9a9ab0', padding: 60 }}>加载中…</div>;
+  if (booting && !isShare) return <div style={{ textAlign: 'center', color: '#9a9ab0', padding: 60 }}>加载中…</div>;
 
   const showApp = !isAuthConfigured() || user;
 
@@ -90,7 +103,12 @@ export default function App() {
           </button>
         </div>
       )}
-      {!showApp && <AuthPage />}
+      {!showApp && !isShare && <AuthPage />}
+      {isShare && (
+        <Routes>
+          <Route path="/share/:token" element={<ShareView />} />
+        </Routes>
+      )}
       {showApp && (
         <Routes>
           <Route path="/" element={<TripList />} />

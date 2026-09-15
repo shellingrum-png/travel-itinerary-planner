@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import http from 'node:http';
 import fs from 'node:fs';
+import { randomBytes } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(__dirname, 'scripts', 'transport_service.py');
@@ -146,6 +147,56 @@ async function snapRemove(userId, tripId) {
     await supabaseFetch(`/trips?id=eq.${encodeURIComponent(tripId)}&user_id=eq.${encodeURIComponent(userId)}`, { method: 'DELETE' });
     return true;
   } catch { return false; }
+}
+
+// ── 分享:生成/撤销不可猜测的只读 token,家人免登录按 token 查看 ──
+// share_route_cache:主账号已算好的真实路线里程,随分享一并下发,家人端无需冷启动重算
+// (否则高德插件首次加载慢 → 撞 5s 超时 → 里程退回直线近似)。
+// 生成并返回分享 token(幂等:已有则复用现有 token,但仍刷新路线缓存)。
+// 旅程不存在或不属于该用户 → null
+async function shareCreate(userId, tripId, routeCache) {
+  try {
+    const res = await supabaseFetch(`/trips?select=share_token&id=eq.${encodeURIComponent(tripId)}&user_id=eq.${encodeURIComponent(userId)}&limit=1`);
+    if (!res.ok) return null;
+    const rows = await res.json();
+    if (!rows.length) return null;
+    const token = rows[0].share_token || randomBytes(24).toString('hex'); // 48 位十六进制,不可猜测
+    const patch = {
+      share_token: token,
+      ...(Array.isArray(routeCache) ? { share_route_cache: routeCache } : {}),
+    };
+    const r = await supabaseFetch(`/trips?id=eq.${encodeURIComponent(tripId)}&user_id=eq.${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify(patch),
+    });
+    return r.ok ? token : null;
+  } catch { return null; }
+}
+
+// 撤销分享(清空 token,原链接立即失效)
+async function shareRevoke(userId, tripId) {
+  try {
+    await supabaseFetch(`/trips?id=eq.${encodeURIComponent(tripId)}&user_id=eq.${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ share_token: null, share_route_cache: null }),
+    });
+    return true;
+  } catch { return false; }
+}
+
+// 公开读取:仅按 token 查该旅程快照,【不带 user_id 过滤】(这是公开端点)
+// 附带主账号算好的路线缓存(share_route_cache),家人端可直接回填、免重算
+async function shareLoad(token) {
+  try {
+    const res = await supabaseFetch(`/trips?select=snapshot,share_route_cache&share_token=eq.${encodeURIComponent(token)}&limit=1`);
+    if (!res.ok) return null;
+    const rows = await res.json();
+    const snap = rows?.[0]?.snapshot;
+    if (!snap) return null;
+    return { ...snap, routeCache: rows[0].share_route_cache || [] };
+  } catch { return null; }
 }
 
 // 本地文件兜底存储(若 Supabase 不可用)
@@ -298,10 +349,38 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 400, { ok: false, error: '快照路由无效' });
   }
 
+  // 分享:POST/DELETE /api/share/:tripId (需登录,管理分享 token) + GET /api/share/:token (免登录,只读)
+  if (url.pathname.startsWith('/api/share')) {
+    const match = url.pathname.match(/^\/api\/share\/([^\/]+)$/);
+    if (match) {
+      const seg = match[1];
+      // 公开只读:GET /api/share/:token —— 无需登录,仅按 token 返回该旅程快照
+      if (req.method === 'GET') {
+        const snap = await shareLoad(seg);
+        if (!snap) return sendJson(res, 404, { ok: false, error: '分享链接无效或已撤销' });
+        return sendJson(res, 200, snap);
+      }
+      // 生成/撤销分享:需登录,且旅程须属于当前用户
+      const userId = await requireUser(req);
+      if (!userId) return sendJson(res, 401, { ok: false, error: '未登录' });
+      if (req.method === 'POST') {
+        const body = await readBody(req);
+        const token = await shareCreate(userId, seg, body.routeCache);
+        if (!token) return sendJson(res, 404, { ok: false, error: '旅程不存在' });
+        return sendJson(res, 200, { ok: true, token });
+      }
+      if (req.method === 'DELETE') {
+        await shareRevoke(userId, seg);
+        return sendJson(res, 200, { ok: true });
+      }
+    }
+    return sendJson(res, 400, { ok: false, error: '分享路由无效' });
+  }
+
   // 预检
   if (req.method === 'OPTIONS') { setCors(res); return res.writeHead(204).end(); }
 
-  sendJson(res, 404, { ok: false, error: `未找到路由 ${url.pathname}。可用: /api/transport, /api/health, /api/snapshot, /api/llm/chat/completions, /api/amap/place` });
+  sendJson(res, 404, { ok: false, error: `未找到路由 ${url.pathname}。可用: /api/transport, /api/health, /api/snapshot, /api/share, /api/llm/chat/completions, /api/amap/place` });
 });
 
 server.listen(PORT, () => {

@@ -15,6 +15,7 @@ import { optimizeItinerary, estimateDayCapacity, estimateReachablePois, dayWindo
 import type { ItineraryPoi, DayAnchor } from '../services/itineraryEngine';
 import ItemEditModal, { type EditPatch } from '../components/ItemEditModal';
 import MemberModal from '../components/MemberModal';
+import ShareModal from '../components/ShareModal';
 import TransportEditModal, { type TransportEditPatch } from '../components/TransportEditModal';
 import TicketFields, { emptyTicketFields, type TicketFieldsValue } from '../components/TicketFields';
 import { C } from '../components/ui';
@@ -51,6 +52,8 @@ export default function TripDetail() {
   const online = useOnlineStatus();
   const [transports, setTransports] = useState<Transport[]>([]); // 大交通表
   const [showMembers, setShowMembers] = useState(false); // V12 成员管理弹窗
+  const [showShare, setShowShare] = useState(false); // 分享给家人弹窗
+  const [showAdjustDates, setShowAdjustDates] = useState(false); // 调整日期弹窗
 
   // ── 编辑状态 ──
   const [activeDayId, setActiveDayId] = useState<string | null>(null);
@@ -1235,16 +1238,15 @@ export default function TripDetail() {
     await load();
   };
 
-  const handleAdjustDates = () => {
-    const start = prompt('修改开始日期（留空不变，格式 yyyy-mm-dd）:', trip?.startDate || '');
-    if (start === null) return;
-    const end = prompt('修改结束日期（留空不变，格式 yyyy-mm-dd）:', trip?.endDate || '');
-    if (end === null) return;
+  const handleAdjustDates = () => setShowAdjustDates(true);
+
+  const applyAdjustDates = (startDate: string, endDate: string) => {
+    if (!trip) return;
     const patch: Partial<Trip> = {};
-    if (start && /^\d{4}-\d{2}-\d{2}$/.test(start)) patch.startDate = start;
-    if (end && /^\d{4}-\d{2}-\d{2}$/.test(end)) patch.endDate = end;
+    if (startDate && /^\d{4}-\d{2}-\d{2}$/.test(startDate)) patch.startDate = startDate;
+    if (endDate && /^\d{4}-\d{2}-\d{2}$/.test(endDate)) patch.endDate = endDate;
     if (Object.keys(patch).length > 0) {
-      db.updateTrip(trip!.id, patch);
+      db.updateTrip(trip.id, patch);
       load();
     }
   };
@@ -1465,16 +1467,9 @@ export default function TripDetail() {
         </div>
         {!online && <div style={{ background: 'rgba(255,209,102,0.12)', padding: 6, borderRadius: 6, margin: '8px 0', fontSize: 12, color: '#ffd166' }}>当前为离线/弱网模式</div>}
 
-        {/* 花费概览(纯数据,入口在下方工具行) */}
+        {/* 花费概览 */}
         <div style={{ marginBottom: 10, display: 'flex', gap: 10, fontSize: 13, alignItems: 'center' }}>
           <span>已花 ¥{spent.toFixed(0)}</span>
-          {trip.totalBudget ? (
-            <span style={{ color: spent > trip.totalBudget ? C.danger : C.success }}>
-              剩余 ¥{Math.max(0, trip.totalBudget - spent).toFixed(0)}
-            </span>
-          ) : (
-            <span style={{ color: '#6b7a8f', fontSize: 12 }}>未设预算</span>
-          )}
         </div>
 
         {/* 工具行:调整/优化/成员/记账/概览 统一样式平铺 */}
@@ -1484,6 +1479,7 @@ export default function TripDetail() {
           <button onClick={() => setShowMembers(true)} style={toolBtn} title="管理同行成员(记账分摊用)">
             成员 {effectiveMembers(trip).length}
           </button>
+          <button onClick={() => setShowShare(true)} style={toolBtn} title="生成只读链接分享给家人查看">分享</button>
           <Link to={`/trip/${trip.id}/bookkeeping`} style={toolLink}>记账</Link>
           <Link to={`/trip/${trip.id}/overview`} style={toolLink}>概览</Link>
         </div>
@@ -2047,6 +2043,68 @@ export default function TripDetail() {
         onSaved={() => load()}
       />
     )}
+
+    {/* 分享给家人(只读链接) */}
+    {showShare && (
+      <ShareModal tripId={trip.id} onClose={() => setShowShare(false)} />
+    )}
+
+    {/* 调整日期(居中弹窗,替代原生 prompt —— prompt 阻塞主线程,移动端/自动化下会卡死) */}
+    {showAdjustDates && (
+      <AdjustDatesModal
+        startDate={trip.startDate}
+        endDate={trip.endDate}
+        onClose={() => setShowAdjustDates(false)}
+        onSave={applyAdjustDates}
+      />
+    )}
     </>
+  );
+}
+
+function AdjustDatesModal({ startDate, endDate, onClose, onSave }: {
+  startDate: string;
+  endDate: string;
+  onClose: () => void;
+  onSave: (s: string, e: string) => void;
+}) {
+  const [start, setStart] = useState(startDate);
+  const [end, setEnd] = useState(endDate);
+  const invalid = !/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end);
+  const reversed = !invalid && end < start;
+  const save = () => {
+    if (invalid || reversed) return;
+    onSave(start, end);
+    onClose();
+  };
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 14, padding: 20, width: '100%', maxWidth: 360, color: '#eee' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <strong style={{ fontSize: 16, color: C.warning, display: 'block', marginBottom: 14 }}>调整日期</strong>
+        <label style={{ fontSize: 12, color: '#9a9ab0', display: 'block', marginBottom: 4 }}>开始日期</label>
+        <input type="date" value={start} onChange={(e) => setStart(e.target.value)} style={{ marginBottom: 12 }} />
+        <label style={{ fontSize: 12, color: '#9a9ab0', display: 'block', marginBottom: 4 }}>结束日期</label>
+        <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} style={{ marginBottom: 8 }} />
+        {invalid && <p style={{ color: C.danger, fontSize: 12, margin: '0 0 8px' }}>日期格式需为 yyyy-mm-dd</p>}
+        {reversed && <p style={{ color: C.danger, fontSize: 12, margin: '0 0 8px' }}>结束日期不能早于开始日期</p>}
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button
+            onClick={save}
+            disabled={invalid || reversed}
+            style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', background: invalid || reversed ? '#3a3a52' : C.primary, color: '#fff', cursor: invalid || reversed ? 'not-allowed' : 'pointer' }}
+          >保存</button>
+          <button
+            onClick={onClose}
+            style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)', color: '#c8c8d8', cursor: 'pointer' }}
+          >取消</button>
+        </div>
+      </div>
+    </div>
   );
 }

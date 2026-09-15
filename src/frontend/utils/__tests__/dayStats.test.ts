@@ -127,17 +127,41 @@ describe('computeTripOverview — 每天开车公里', () => {
     expect(ov.dayStats[0].driveKm).toBeLessThan(50);
   });
 
-  it('非 drive 段不计入距离', () => {
+  it('非 drive 段不计入距离(火车/公交不按驾车里程算)', () => {
     const p3 = poi('p3', '门源', 101.0, 37.4);
     const itemsByDay: Record<string, ItineraryItem[]> = {
       d1: [
         item('d1', 0, { poiId: 'p1', transportMode: 'walk' }),
         item('d1', 1, { poiId: 'p2', transportMode: 'transit' }), // 公交
-        item('d1', 2, { poiId: 'p3', transportMode: 'walk' }),
+        item('d1', 2, { poiId: 'p3', transportMode: 'train' }),   // 火车
       ],
     };
     const ov = computeTripOverview({
       trip, days: [d1], itemsByDay, pois: [p1, p2, p3], hotels: [], transports: [], expenses: [], routeCache: [],
+    });
+    expect(ov.dayStats[0].driveKm).toBe(0);
+  });
+
+  it('未指定交通方式(默认 walk)但距离较远时,按距离修正为驾车并计入里程(回归:P3 全 0.0km)', () => {
+    // 真实数据里景点 transportMode 普遍是默认值 'walk' 且无 transportModeSet,
+    // 旧实现直接按 'walk' 跳过 → 概览页所有天都是 0.0km。修复后应按 resolveMode 改判为驾车。
+    const itemsByDay: Record<string, ItineraryItem[]> = {
+      d1: [item('d1', 0, { poiId: 'p1', transportMode: 'walk' }), item('d1', 1, { poiId: 'p2', transportMode: 'walk' })],
+    };
+    const ov = computeTripOverview({
+      trip, days: [d1], itemsByDay, pois: [p1, p2], hotels: [], transports: [], expenses: [], routeCache: [],
+    });
+    expect(ov.dayStats[0].driveKm).toBeGreaterThan(40); // 44.5km 直线 > 步行阈值 → 驾车
+    expect(ov.dayStats[0].driveKmApprox).toBe(true);
+  });
+
+  it('近距离默认 walk 仍按步行,不计入驾车里程', () => {
+    const near = poi('pn', '近处', 101.0, 36.503); // 距 p1 约 330m
+    const itemsByDay: Record<string, ItineraryItem[]> = {
+      d1: [item('d1', 0, { poiId: 'p1', transportMode: 'walk' }), item('d1', 1, { poiId: 'pn', transportMode: 'walk' })],
+    };
+    const ov = computeTripOverview({
+      trip, days: [d1], itemsByDay, pois: [p1, near], hotels: [], transports: [], expenses: [], routeCache: [],
     });
     expect(ov.dayStats[0].driveKm).toBe(0);
   });

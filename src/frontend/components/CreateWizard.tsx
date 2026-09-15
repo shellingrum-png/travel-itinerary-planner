@@ -18,9 +18,16 @@ export default function CreateWizard({ onClose }: { onClose: () => void }) {
     : 0;
 
   const addCity = () => {
-    const city = cityInput.trim();
-    if (!city || store.cities.includes(city)) return;
-    store.setCities([...store.cities, city]);
+    // 支持一次输入多个:「西宁,张掖,敦煌」按中英文逗号/顿号拆开,逐个去重
+    // (不用空格分隔——城市名本身可能含空格)
+    const parts = cityInput
+      .split(/[,，、]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!parts.length) return;
+    const next = [...store.cities];
+    for (const c of parts) if (!next.includes(c)) next.push(c);
+    store.setCities(next);
     setCityInput('');
   };
 
@@ -82,11 +89,18 @@ export default function CreateWizard({ onClose }: { onClose: () => void }) {
     </div>
   );
 
-  const renderStep2 = () => (
+  const renderStep2 = () => {
+    const totalNights = totalDays > 0 ? totalDays - 1 : 0;
+    const assignedNights = store.cities.reduce((s, c) => s + (store.nights[c] ?? 1), 0);
+    const remain = totalNights - assignedNights;
+    return (
     <div>
       <h3 style={{ marginTop: 0, color: '#e0e0e0' }}>第二步 · 分配城际晚数</h3>
       <div style={{ fontSize: 12, color: '#999', marginBottom: 10 }}>
-        总天数 <strong style={{ color: '#06d6a0' }}>{totalDays}</strong> · 需分配 <strong style={{ color: '#ffd166' }}>{totalDays - 1}</strong> 晚
+        总天数 <strong style={{ color: '#06d6a0' }}>{totalDays}</strong> · 已分配{' '}
+        <strong style={{ color: '#ffd166' }}>{assignedNights}</strong> / {totalNights} 晚
+        {remain > 0 && <span style={{ color: '#ff9f43' }}> · 还差 {remain} 晚</span>}
+        {remain < 0 && <span style={{ color: '#ff6b6b' }}> · 超出 {-remain} 晚</span>}
       </div>
 
       {store.cities.map((city) => {
@@ -110,7 +124,8 @@ export default function CreateWizard({ onClose }: { onClose: () => void }) {
         <button onClick={store.next} style={{ ...btnStyle, background: '#1677ff', flex: 2 }}>下一步 · 匹配模板</button>
       </div>
     </div>
-  );
+    );
+  };
 
   const renderStep3 = () => (
     <div>

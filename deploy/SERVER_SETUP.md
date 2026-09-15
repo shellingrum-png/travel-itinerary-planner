@@ -27,11 +27,21 @@ create table if not exists public.trips (
   city_nodes      jsonb,
   snapshot        jsonb,          -- 整旅程快照(核心字段)
   user_id         text,           -- 归属账号(V10 多用户隔离)
+  share_token     text,           -- 只读分享 token(家人免登录查看,可撤销)
   created_at      timestamptz default now(),
   updated_at      timestamptz default now()
 );
 create index if not exists trips_user_id_idx on public.trips (user_id);
+create unique index if not exists trips_share_token_key
+  on public.trips (share_token) where share_token is not null;
 ```
+
+> **老项目升级(已有 trips 表)**:只需补分享列,在 SQL Editor 执行:
+> ```sql
+> alter table public.trips add column if not exists share_token text;
+> create unique index if not exists trips_share_token_key
+>   on public.trips (share_token) where share_token is not null;
+> ```
 
 ### 1.2 ⚠️ 必须开启 RLS 并撤销匿名权限
 
@@ -52,7 +62,6 @@ select grantee, privilege_type from information_schema.role_table_grants
 ```
 
 ### 1.3 ⚠️ 关闭「邮箱确认」
-
 **Authentication → Providers → Email → 关掉 `Confirm email`**
 (或用 Management API:`PATCH /v1/projects/{ref}/config/auth` 传 `{"mailer_autoconfirm": true}`)
 

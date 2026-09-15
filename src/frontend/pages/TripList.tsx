@@ -56,11 +56,12 @@ export default function TripList() {
         alert('云端没有需要恢复的旅程(都已在本地)。');
       } else {
         let ok = 0;
+        const errs: string[] = [];
         for (const id of missing) {
-          const r = await restoreTrip(id);
-          if (r) ok++;
+          const err = await restoreTrip(id);
+          if (!err) ok++; else errs.push(`${id.slice(0, 8)}: ${err.message}`);
         }
-        alert(`✅ 已从云端恢复 ${ok}/${missing.length} 个旅程。`);
+        alert(`✅ 已从云端恢复 ${ok}/${missing.length} 个旅程。${errs.length ? `\n失败:${errs.join(';')}` : ''}`);
         await load();
       }
     } catch (e: any) {
