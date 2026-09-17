@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { db } from '../services/db';
 import { computeTripOverview, type TripOverview } from '../utils/dayStats';
+import { computeCrossDayDrive } from '../utils/crossDay';
+import { getDuration } from '../services/amap';
 import type { Trip, ItineraryDay, ItineraryItem, Poi, Hotel, Expense, Transport, RouteCache } from '../types';
 import { C, card } from '../components/ui';
 
@@ -45,8 +47,25 @@ export default function TripOverviewPage() {
       const expenses = await db.listExpenses(tripId);
       const routeCache = await db.listRouteCache();
 
-      setOverview(computeTripOverview({
+      const ov = computeTripOverview({
         trip: t, days, itemsByDay, pois, hotels, transports, expenses, routeCache,
+      });
+      setOverview(ov);
+
+      // 补上跨天衔接段(当天首站 ← 前一天末站)的驾车里程,与详情页「当天全部驾车里程」口径一致。
+      // computeTripOverview 只算当天内部,这里单独算衔接段后并入。
+      const crossKm = await computeCrossDayDrive(days, itemsByDay, pois, getDuration);
+      setOverview((p) => p && ({
+        ...p,
+        dayStats: p.dayStats.map((ds, i) => {
+          const c = crossKm[i];
+          if (!c) return ds;
+          return {
+            ...ds,
+            driveKm: Math.round((ds.driveKm + c.km) * 10) / 10,
+            driveKmApprox: ds.driveKmApprox || !c.real,
+          };
+        }),
       }));
     } finally {
       setLoading(false);
@@ -109,8 +128,8 @@ export default function TripOverviewPage() {
           <div key={d.daySeq} style={{ ...card, marginBottom: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <strong style={{ fontSize: 15 }}>Day {d.daySeq} · {d.date}</strong>
-              <span style={{ fontSize: 13, color: C.info }}>
-                🚗 {d.driveKm.toFixed(1)} km{d.driveKmApprox ? ' ≈' : ''}
+              <span title="当天全部驾车里程:含「从上一站开过来」那段跨天衔接" style={{ fontSize: 13, color: C.info }}>
+                当天驾车 {d.driveKm.toFixed(1)} km{d.driveKmApprox ? ' ≈' : ''}
               </span>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: d.pois.length ? 8 : 0 }}>

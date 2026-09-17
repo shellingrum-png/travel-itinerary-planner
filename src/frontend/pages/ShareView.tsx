@@ -90,6 +90,24 @@ export default function ShareView() {
       const data = await buildSegments(snap, ap, routeCache.length ? 5 : 2);
       if (cancelled) return;
       setSegData(data);
+
+      // 概览的驱动公里只算「当天内部」,这里补上跨天衔接段,
+      // 让顶部数字 = 明细相加(与详情页口径一致)。
+      // 点位顺序与 buildDayPoints 一致(按 daySeq 排序),故下标可直接对应。
+      const sortedDays = [...snap.days].sort((a, b) => a.daySeq - b.daySeq);
+      setOverview((prev) => {
+        if (!prev) return prev;
+        const dayStats = prev.dayStats.map((ds, i) => {
+          const cross = data.cross.get(sortedDays[i]?.id ?? '');
+          if (!cross || cross.mode !== 'drive' || cross.distanceKm <= 0) return ds;
+          return {
+            ...ds,
+            driveKm: Math.round((ds.driveKm + cross.distanceKm) * 10) / 10,
+            driveKmApprox: ds.driveKmApprox || !cross.real,
+          };
+        });
+        return { ...prev, dayStats };
+      });
     })();
     return () => { cancelled = true; };
   }, [snap, routeCache]);
@@ -416,8 +434,8 @@ function DayCard({
         </strong>
         <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {(hasSeg || day.driveKm > 0) && (
-            <span style={{ fontSize: 13, color: C.info }}>
-              🚗 {(hasSeg ? driveKm : day.driveKm).toFixed(1)} km{(hasSeg ? approx : day.driveKmApprox) ? ' ≈' : ''}
+            <span title="当天全部驾车里程:含「从上一站开过来」那段跨天衔接" style={{ fontSize: 13, color: C.info }}>
+              当天驾车 {(hasSeg ? driveKm : day.driveKm).toFixed(1)} km{(hasSeg ? approx : day.driveKmApprox) ? ' ≈' : ''}
             </span>
           )}
           <span style={{ fontSize: 12, color: '#6a6a80' }}>{open ? '收起' : '展开'}</span>
@@ -455,7 +473,7 @@ function DayCard({
           {/* 跨天衔接:本天首站 ← 上一天末站 */}
           {cross && (
             <div style={{ fontSize: 11, color: '#b8a0e0', padding: '4px 8px', borderRadius: 6, background: 'rgba(184,160,224,0.12)' }}>
-              ⇡ 距上一天末站 {fmtSegment(cross)}
+              ⇡ 从上一站开过来 {fmtSegment(cross)}
             </div>
           )}
           {/* 首日:到达机场 → 首站 */}

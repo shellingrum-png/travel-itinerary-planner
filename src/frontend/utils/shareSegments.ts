@@ -8,6 +8,7 @@
 import { getDuration, resolveTransportHubCoord } from '../services/amap';
 import { findDepartTransport, findReturnTransport } from '../services/itineraryEngine';
 import { computeAllSegments, type SegPoint, type SegmentInfo } from './segments';
+import { ROUTE_NODE_TYPES } from './crossDay';
 import type { TripSnapshot } from '../services/sync';
 
 /** 机场虚拟节点 id(机场来自大交通记录,不是普通 item)—— 与详情页一致 */
@@ -39,13 +40,17 @@ export async function resolveAirports(snap: TripSnapshot): Promise<AirportPair> 
   };
 }
 
-/** 逐日点序列(景点 POI 按 orderSeq + 首/末日的机场虚拟节点) */
+/**
+ * 参与路段计算的节点类型(与详情页一致) —— 见 utils/crossDay 的说明。
+ * 漏掉 hotel 会让「末站 → 当晚酒店」整段丢失,当天里程偏小。
+ */
+/** 逐日点序列(景点/酒店按 orderSeq + 首/末日的机场虚拟节点) */
 export function buildDayPoints(snap: TripSnapshot, ap: AirportPair): Array<{ dayId: string; points: SegPoint[] }> {
   const poiById = new Map(snap.pois.map((p) => [p.id, p]));
   const sorted = [...snap.days].sort((a, b) => a.daySeq - b.daySeq);
   return sorted.map((d, di) => {
     const pts: SegPoint[] = snap.items
-      .filter((it) => it.dayId === d.id && it.itemType === 'poi' && it.poiId)
+      .filter((it) => it.dayId === d.id && ROUTE_NODE_TYPES.has(it.itemType) && it.poiId)
       .sort((a, b) => a.orderSeq - b.orderSeq)
       .map((it) => {
         const p = poiById.get(it.poiId!);

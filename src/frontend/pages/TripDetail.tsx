@@ -1561,16 +1561,33 @@ export default function TripDetail() {
                       if (!cross) return null;
                       return (
                         <div style={{ fontSize: 11, color: '#b8a0e0', padding: '5px 10px', borderRadius: 6, background: 'rgba(184,160,224,0.12)', marginBottom: 8 }}>
-                          ⇡ 距上一天末站 {fmtSegment(cross)}
+                          ⇡ 从上一站开过来 {fmtSegment(cross)}
                         </div>
                       );
                     })()}
                     {ds && ds.items.length > 0 && (() => {
                       const timing = calcDayTiming(ds);
+                      // 当天驾车合计 = 天内各驾车段 + 跨天衔接段(与概览页/分享页同口径),
+                      // 有它就等于「下面明细加总」,用户不会觉得数字对不上。
+                      const driveKm = [
+                        ...(intraSegs.get(d.id) ?? []),
+                        crossSegs.get(d.id) ?? null,
+                      ].reduce((s, x) => s + (x && x.mode === 'drive' ? x.distanceKm : 0), 0);
+                      const anyApprox = [
+                        ...(intraSegs.get(d.id) ?? []),
+                        crossSegs.get(d.id) ?? null,
+                      ].some((x) => x && x.mode === 'drive' && !x.real);
                       const real = intraSegs.get(d.id)?.some((s) => s?.real);
                       return (
                         <div style={{ fontSize: 12, color: '#7eb8e0', padding: '6px 10px', borderRadius: 6, background: 'rgba(126,184,224,0.1)', marginBottom: 8 }}>
                           ⏱ 单日总时长 ~{fmtMin(timing.driveMin + timing.visitMin)} = 路上 {fmtMin(timing.driveMin)}{real ? '' : '~'} + 游览 {fmtMin(timing.visitMin)}
+                          {driveKm > 0 && (
+                            <>
+                              <br />
+                              🚗 当天驾车 {driveKm.toFixed(1)} km{anyApprox ? ' ≈' : ''}
+                              <span style={{ color: '#6a8aa8' }}> · 含「从上一站开过来」,等于下方明细驾车段之和</span>
+                            </>
+                          )}
                         </div>
                       );
                     })()}
