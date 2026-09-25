@@ -64,20 +64,12 @@ export async function getPoiCard(
 ): Promise<PoiAiCard> {
   const cacheKey = md5(`${poi.name}+${city}`);
 
-  // ── 第 1 层: RAG 攻略库 (soft dependency) ──
-  // Unconfigured / empty → silently skip
-  try {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    if (supabaseUrl) {
-      // RAG not yet implemented; skip for now
-    }
-  } catch { /* best-effort */ }
+  // ── 第 1 层: AI 卡片缓存(原 RAG 攻略库未实现,此处即首层) ──
 
-  // ── 第 2 层: AI 卡片缓存 ──
   const cached = await db.getPoiCardByKey(cacheKey);
   if (cached) return cached;
 
-  // ── 第 3 层: LLM 生成 ──
+  // ── 第 2 层: LLM 生成 ──
   if (IS_PROXY || (API_KEY && API_KEY !== 'your_llm_api_key')) {
     try {
       const token = IS_PROXY ? await getAccessToken() : null;
