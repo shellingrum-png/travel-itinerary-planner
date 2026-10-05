@@ -66,6 +66,8 @@ export function remapExpenses(
       note: e.note,
     };
     if (e.paidBy !== undefined) out.paidBy = e.paidBy;
+    // 垫付人(可多选)随账目复制;成员 id 整体保持一致,无需重映射
+    if (e.paidByIds !== undefined) out.paidByIds = e.paidByIds;
     if (dayId !== undefined) out.dayId = dayId;
     if (refType !== undefined) out.refType = refType;
     if (refId !== undefined) out.refId = refId;

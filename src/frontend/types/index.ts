@@ -159,7 +159,10 @@ export interface Expense {
   category: ExpenseCategory;
   amount: number;   // 总额(始终为总额,总计/预算口径不变)
   currency: string;
+  /** 出账人姓名文本(旧数据/单次垫付;多人垫付时以 paidByIds 为准) */
   paidBy?: string;
+  /** 出账人成员 id(支持多选:几个人一起垫付)。空数组/缺失 → 回落 paidBy 文本匹配 */
+  paidByIds?: string[];
   date?: string;
   note?: string;
   dirty: 0 | 1; // 离线待同步

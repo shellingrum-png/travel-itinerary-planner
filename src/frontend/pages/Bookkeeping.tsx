@@ -7,7 +7,8 @@ import MemberModal from '../components/MemberModal';
 import TicketFields, { emptyTicketFields, ticketFieldsFromExpense, type TicketFieldsValue } from '../components/TicketFields';
 import { ticketAmount, ticketSummary } from '../utils/ticket';
 import {
-  effectiveMembers, expenseShares, computeMemberSpend, partsTotal, splitSummary, participatesIn,
+  effectiveMembers, expenseShares, computeMemberSpend, computeSettlement, expenseLinesFor, partsTotal, splitSummary,
+  participatesIn, payersOf, payerLabel,
 } from '../utils/split';
 
 const CATEGORIES: { value: ExpenseCategory; label: string }[] = [
@@ -39,7 +40,8 @@ export default function Bookkeeping() {
   const [category, setCategory] = useState<ExpenseCategory>('food');
   const [note, setNote] = useState('');
   const [date, setDate] = useState(todayISO());
-  const [paidBy, setPaidBy] = useState('');
+  /** 垫付人(出账人,支持多人:几个人一起扫码付) */
+  const [paidByIds, setPaidByIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   // V12 分摊
   const [splitUi, setSplitUi] = useState<SplitUi>('all');
@@ -50,6 +52,8 @@ export default function Bookkeeping() {
   const [ticketFields, setTicketFields] = useState<TicketFieldsValue>(emptyTicketFields);
   /** 按人查看:null = 全部 */
   const [focusMemberId, setFocusMemberId] = useState<string | null>(null);
+  /** 分摊汇总里展开某人 → 看他这个数是哪几行明细堆出来的 */
+  const [openLedgerId, setOpenLedgerId] = useState<string | null>(null);
 
   const load = async () => {
     if (!tripId) return;
@@ -71,6 +75,15 @@ export default function Bookkeeping() {
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
   const memberSpend = useMemo(() => computeMemberSpend(trip, expenses), [trip, expenses]);
   const focus = focusMemberId ? memberSpend.find((m) => m.member.id === focusMemberId) : null;
+  /** 结算账本 + 最简转账清单 */
+  const settlement = useMemo(() => computeSettlement(trip, expenses), [trip, expenses]);
+  /** 每个成员的逐行分摊来源(展开「成员分摊汇总」时用) */
+  const ledgerByMember = useMemo(
+    () => new Map(
+      memberSpend.map((ms) => [ms.member.id, expenses.flatMap((e) => expenseLinesFor(e, ms.member, members))]),
+    ),
+    [memberSpend, expenses, members],
+  );
 
   // 成员变化后,清理已失效的选中态
   useEffect(() => {
@@ -80,6 +93,16 @@ export default function Bookkeeping() {
   }, [members, focusMemberId]);
 
   const count = members.length;
+  // 明细行(草稿)合计
+  const draftTotal = partsTotal(
+    draftParts.map((p) => ({ label: p.label, units: Number(p.units), unitPrice: Number(p.unitPrice) })),
+  );
+
+  // parts 模式:金额恒等于明细合计,明细变化时自动回填。
+  // (修复:门票快捷区联动曾把金额覆盖成 ticketAmount,导致「点按明细合计填入后一保存又被改回去」)
+  useEffect(() => {
+    if (splitUi === 'parts' && draftTotal > 0) setAmount(draftTotal.toFixed(2));
+  }, [splitUi, draftTotal]);
   const spent = expenses.reduce((s, e) => s + e.amount, 0);
   // 人均:全部视图 = 总额/人数;按人视图 = 该成员应分摊
   const perCapita = focus ? focus.share : spent / Math.max(1, count);
@@ -108,7 +131,7 @@ export default function Bookkeeping() {
   };
 
   const resetForm = () => {
-    setAmount(''); setNote(''); setPaidBy(''); setError(null);
+    setAmount(''); setNote(''); setPaidByIds([]); setError(null);
     setSplitUi('all'); setParticipants([]); setDraftParts([emptyPart()]);
     setEditId(null); setTicketFields(emptyTicketFields());
     setDate(trip?.startDate || todayISO()); // 回到行程首日(而非今天)
@@ -121,7 +144,8 @@ export default function Bookkeeping() {
     setCategory(e.category);
     setNote(e.note ?? '');
     setDate(e.date ?? todayISO());
-    setPaidBy(e.paidBy ?? '');
+    // 垫付人:新数据走 paidByIds;旧数据只有 paidBy(姓名文本)→ 反查成 id
+    setPaidByIds(e.paidByIds ?? (e.paidBy ? payersOf(e, members).map((m) => m.id) : []));
     setSplitUi(e.splitMode === 'parts' ? 'parts' : e.participantIds && e.participantIds.length ? 'some' : 'all');
     setParticipants(e.participantIds ?? []);
     setDraftParts(e.parts?.map((p) => ({ label: p.label, units: String(p.units), unitPrice: String(p.unitPrice), memberId: p.memberId ?? '' })) ?? [emptyPart()]);
@@ -142,11 +166,16 @@ export default function Bookkeeping() {
       currency: trip?.currency ?? 'CNY',
       date,
       note: note || undefined,
-      paidBy: paidBy || undefined,
+      // 垫付人(可多选):paidByIds 存 id,paidBy 存姓名文本,两者始终一致(便于旧字段读取)
+      paidByIds: paidByIds.length > 0 ? paidByIds : undefined,
+      paidBy: paidByIds.length > 0
+        ? paidByIds.map((id) => memberById.get(id)?.name).filter(Boolean).join('/') || undefined
+        : undefined,
     };
 
-    // 门票分类:填了人数/老人 → 联动总额并写入字段
-    if (category === 'ticket') {
+    // 门票分类快捷录入:填了人数/老人 → 联动总额并写入字段。
+    // parts 模式除外:明细行已承载票种/张数/单价,以明细合计为准(见下方 parts 分支)。
+    if (category === 'ticket' && splitUi !== 'parts') {
       const hasTicket = ticketFields.count !== '' || ticketFields.unitPrice !== '' || ticketFields.seniorCount !== '' || ticketFields.seniorPrice !== '';
       if (hasTicket) {
         const tk = ticketAmount({
@@ -176,6 +205,13 @@ export default function Bookkeeping() {
         .filter((p) => p.units > 0 && p.unitPrice > 0);
       patch.splitMode = 'parts';
       patch.parts = parts;
+      // 明细合计即总额:按绑定成员精确分摊,不再依赖手填金额
+      patch.amount = Math.round(partsTotal(parts) * 100) / 100;
+      // 清掉旧门票快捷字段,避免列表摘要(如「4人·成人3×120」)与明细相互矛盾
+      patch.ticketCount = undefined;
+      patch.unitPrice = undefined;
+      patch.seniorCount = undefined;
+      patch.seniorPrice = undefined;
     } else if (splitUi === 'some') {
       patch.splitMode = 'even';
       patch.participantIds = participants;
@@ -196,11 +232,6 @@ export default function Bookkeeping() {
     await db.removeExpense(id);
     await load();
   };
-
-  // 明细行(草稿)合计
-  const draftTotal = partsTotal(
-    draftParts.map((p) => ({ label: p.label, units: Number(p.units), unitPrice: Number(p.unitPrice) })),
-  );
 
   const chip = (active: boolean) => ({
     fontSize: 12, padding: '4px 12px', borderRadius: 999, cursor: 'pointer', whiteSpace: 'nowrap' as const,
@@ -285,7 +316,7 @@ export default function Bookkeeping() {
                     {' '}<span style={{ fontSize: 13, color: '#9a9ab2' }}>{CATEGORIES.find((c) => c.value === e.category)?.label ?? e.category}</span>
                   </div>
                   <div style={{ color: '#6a6a80', fontSize: 12, marginTop: 2 }}>
-                    {e.date}{e.note ? ` · ${e.note}` : ''}{e.paidBy ? ` · ${e.paidBy}付` : ''}
+                    {e.date}{e.note ? ` · ${e.note}` : ''}{(() => { const pl = payerLabel(e, members); return pl ? ` · ${pl}付` : ''; })()}
                   </div>
                   {tsum && (
                     <div style={{ color: '#8f9ab8', fontSize: 11, marginTop: 3 }}>{tsum}</div>
@@ -334,14 +365,36 @@ export default function Bookkeeping() {
             </select>
             <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...input, width: 'auto' }} />
             <input placeholder="备注" value={note} onChange={(e) => setNote(e.target.value)} style={{ ...input, flex: 1, minWidth: 100 }} />
-            <select value={paidBy} onChange={(e) => setPaidBy(e.target.value)} style={{ ...input, width: 'auto' }} title="出账人(选填)">
-              <option value="">出账人(选填)</option>
-              {members.map((m) => (<option key={m.id} value={m.name}>{m.name}</option>))}
-            </select>
           </div>
 
-          {/* 门票分类:人数/老人优惠录入,合计自动回填金额 */}
-          {category === 'ticket' && (
+          {/* 垫付人(出账人):可多选,几个人一起付就全选,结算时按人数均摊 */}
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 12, color: '#6a6a80', marginBottom: 6 }}>
+              垫付人(出账人,可多选):
+              {paidByIds.length > 0 && (
+                <span style={{ color: '#9a9ab0', marginLeft: 4 }}>
+                  {paidByIds.length > 1
+                    ? ` ${paidByIds.length} 人各垫 ¥${((parseFloat(amount) || 0) / paidByIds.length).toFixed(2)}`
+                    : ` ${memberById.get(paidByIds[0])?.name ?? ''} 垫 ¥${(parseFloat(amount) || 0).toFixed(2)}`}
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {members.map((m) => {
+                const on = paidByIds.includes(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => setPaidByIds((p) => (on ? p.filter((x) => x !== m.id) : [...p, m.id]))}
+                    style={chip(on)}
+                  >{on ? '✓ ' : ''}{m.name}</button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 门票分类快捷录入:人数/老人优惠,合计自动回填金额(parts 明细模式下隐藏,以明细行为准) */}
+          {category === 'ticket' && splitUi !== 'parts' && (
             <div style={{ marginBottom: 8 }}>
               <TicketFields
                 value={ticketFields}
@@ -443,7 +496,7 @@ export default function Bookkeeping() {
                 )}
               </div>
               <div style={{ fontSize: 11, color: '#6a6a80', marginTop: 6, lineHeight: 1.5 }}>
-                未绑定成员的明细行由全员均摊;绑定的记到该成员名下。金额与明细合计不一致时按比例摊。
+                总金额自动 = 明细合计(¥{draftTotal.toFixed(2)}),按行绑定的人头精确分摊;未绑定成员的行由全员均摊。
               </div>
             </div>
           )}
@@ -461,24 +514,124 @@ export default function Bookkeeping() {
         <div style={{ marginTop: 24 }}>
           <h2 style={{ fontSize: 18, fontWeight: 600 }}>成员分摊汇总</h2>
           <div style={{ ...card, padding: 12 }}>
-            {memberSpend.map((ms, i) => (
-              <div
-                key={ms.member.id}
-                onClick={() => setFocusMemberId(ms.member.id === focusMemberId ? null : ms.member.id)}
-                style={{
-                  display: 'flex', justifyContent: 'space-between', padding: '9px 8px', cursor: 'pointer',
-                  borderBottom: i < memberSpend.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
-                  fontSize: 14, borderRadius: 6,
-                  background: focusMemberId === ms.member.id ? 'rgba(22,119,255,0.12)' : 'transparent',
-                }}
-              >
-                <span>{ms.member.name}</span>
-                <span style={{ color: '#9a9ab0', fontSize: 12 }}>参与 {ms.count} 笔</span>
-                <span>应分摊 <strong style={{ color: C.warning }}>¥{ms.share.toFixed(0)}</strong></span>
-              </div>
-            ))}
+            {memberSpend.map((ms, i) => {
+              const open = openLedgerId === ms.member.id;
+              const ledger = ledgerByMember.get(ms.member.id) ?? [];
+              return (
+                <div key={ms.member.id}>
+                  <div
+                    onClick={() => setOpenLedgerId(open ? null : ms.member.id)}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', padding: '9px 8px', cursor: 'pointer',
+                      borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: 14, borderRadius: 6,
+                      background: focusMemberId === ms.member.id ? 'rgba(22,119,255,0.12)' : 'transparent',
+                    }}
+                  >
+                    <span>
+                      {ms.member.name} <span style={{ color: '#6a6a80', fontSize: 11 }}>{open ? '▾' : '▸'}</span>
+                    </span>
+                    <span style={{ color: '#9a9ab0', fontSize: 12 }}>参与 {ms.count} 笔</span>
+                    <span>应分摊 <strong style={{ color: C.warning }}>¥{ms.share.toFixed(0)}</strong></span>
+                  </div>
+                  {open && (
+                    <div style={{ padding: '4px 10px 10px' }}>
+                      {ledger.length === 0 ? (
+                        <div style={{ fontSize: 12, color: '#6a6a80' }}>暂无分摊明细</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {ledger.map((l, k) => (
+                            <div key={k} style={{ display: 'flex', fontSize: 12, color: '#b9b9cc' }}>
+                              <span style={{ flex: 1, color: l.source === 'bound' ? C.warning : '#8f9ab8' }}>{l.label}</span>
+                              <span style={{ color: '#9a9ab0' }}>
+                                {l.source === 'bound' ? '本人' : l.source === 'even' ? '均摊' : `${count}人均摊`}
+                              </span>
+                              <span style={{ width: 62, textAlign: 'right' }}>¥{l.amount.toFixed(2)}</span>
+                            </div>
+                          ))}
+                          <div style={{ fontSize: 11, color: '#6a6a80', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 5 }}>
+                            逐行合计 ¥{ledger.reduce((s, l) => s + l.amount, 0).toFixed(2)} · 绑定本人的行全额记他;其余行由 {count} 人均摊
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
             <div style={{ fontSize: 11, color: '#6a6a80', marginTop: 8, lineHeight: 1.5 }}>
-              注:仅统计应分摊金额(按分摊方式计算),不含「谁付了钱、谁该转账」的结算。
+              点姓名可展开,看这个数是哪几行明细堆的。注:仅统计应分摊金额(按分摊方式计算),不含「谁付了钱、谁该转账」的结算。
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 结算:应分摊 vs 已垫付 → 谁该收/谁该付 + 最简转账清单 */}
+      {members.length > 1 && (
+        <div style={{ marginTop: 20 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 600 }}>结算 · 谁转谁</h2>
+          <div style={{ ...card, padding: 12 }}>
+            {/* 表头 */}
+            <div style={{ display: 'flex', fontSize: 11, color: '#6a6a80', padding: '4px 8px' }}>
+              <span style={{ flex: 1 }}>成员</span>
+              <span style={{ width: 66, textAlign: 'right' }}>已垫付</span>
+              <span style={{ width: 66, textAlign: 'right' }}>应分摊</span>
+              <span style={{ width: 78, textAlign: 'right' }}>差额</span>
+            </div>
+            {settlement.balances.map((b, i) => {
+              const receivable = b.net > 0;   // 净垫付 → 该收
+              const payable = b.net < 0;      // 净欠账 → 该出
+              return (
+                <div
+                  key={b.member.id}
+                  style={{
+                    display: 'flex', alignItems: 'center', padding: '8px', fontSize: 14,
+                    borderBottom: i < settlement.balances.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
+                  }}
+                >
+                  <span style={{ flex: 1 }}>{b.member.name}</span>
+                  <span style={{ width: 66, textAlign: 'right', color: '#9a9ab0', fontSize: 12 }}>{b.paid.toFixed(2)}</span>
+                  <span style={{ width: 66, textAlign: 'right', color: '#9a9ab0', fontSize: 12 }}>{b.share.toFixed(2)}</span>
+                  <span style={{ width: 78, textAlign: 'right', fontSize: 13 }}>
+                    <strong style={{ color: receivable ? C.warning : payable ? C.info : '#6a6a80' }}>
+                      {receivable ? `+${b.net.toFixed(2)}` : payable ? b.net.toFixed(2) : '0'}
+                    </strong>
+                    {receivable && <span style={{ color: C.warning, fontSize: 11 }}> 该收</span>}
+                    {payable && <span style={{ color: C.info, fontSize: 11 }}> 要出</span>}
+                  </span>
+                </div>
+              );
+            })}
+
+            {/* 转账清单 */}
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: '#9a9ab0', marginBottom: 6 }}>
+                {settlement.transfers.length > 0
+                  ? `转账清单(共 ${settlement.transfers.length} 笔):`
+                  : settlement.balances.every((b) => b.net === 0)
+                    ? '当前已平账,无需转账'
+                    : '暂无可结转账(可能还无人垫付,或有账没记出账人)'}
+              </div>
+              {settlement.transfers.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {settlement.transfers.map((t, i) => (
+                    <div
+                      key={`${t.from.id}-${t.to.id}-${i}`}
+                      style={{ fontSize: 13, padding: '7px 10px', borderRadius: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}
+                    >
+                      <span style={{ color: C.danger }}>{t.from.name}</span>
+                      <span style={{ color: '#6a6a80', margin: '0 6px' }}>→</span>
+                      <span style={{ color: C.warning }}>{t.to.name}</span>
+                      <strong style={{ float: 'right', color: C.warning }}>¥{t.amount.toFixed(2)}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ fontSize: 11, color: '#6a6a80', marginTop: 10, lineHeight: 1.6 }}>
+              差额 = 已垫付 − 应分摊。正数 = 你帮他垫了钱、该收;负数 = 你还没摊够、要出。
+              转账清单按「最该付的付给最该收的」逐笔轧差,笔数最少,照着转即可结清。
+              已在「记一笔 → 垫付人」里勾选上出账人才会计入垫付;多人一起垫付时,按人数均摊各自垫付额。
             </div>
           </div>
         </div>

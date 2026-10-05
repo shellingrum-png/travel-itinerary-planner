@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   effectiveMembers, effectiveCount, isAnonMember, partSubtotal, partsTotal,
-  expenseShares, participatesIn, computeMemberSpend, splitSummary,
+  expenseShares, participatesIn, computeMemberSpend, computeSettlement, splitSummary, payersOf, payerLabel,
 } from '../split';
 import type { Expense, Trip, TripMember } from '../../types';
 
@@ -254,5 +254,136 @@ describe('splitSummary — 列表摘要', () => {
   });
   it('金额 0 → 空串', () => {
     expect(splitSummary(exp({ amount: 0 }), MEMBERS)).toBe('');
+  });
+});
+
+describe('computeSettlement — 结算(应分摊 vs 已垫付)', () => {
+  const TRIP = { members: MEMBERS, companionCount: 4 };
+
+  it('净垫付 = 已垫付 − 应分摊', () => {
+    // 400 均摊给 4 人 → 每人 100;我垫了 400
+    const { balances } = computeSettlement(TRIP, [exp({ id: 'e1', amount: 400, paidBy: '我' })]);
+    const mine = balances.find((b) => b.member.id === 'a')!;
+    expect(mine.share).toBe(100);
+    expect(mine.paid).toBe(400);
+    expect(mine.net).toBe(300); // 该收 300
+  });
+
+  it('每人垫付刚好等于自己份额 → 已平账,无转账', () => {
+    const { balances, transfers } = computeSettlement(TRIP, [
+      exp({ id: 'e1', amount: 100, paidBy: '我' }), exp({ id: 'e2', amount: 100, paidBy: '老张' }),
+      exp({ id: 'e3', amount: 100, paidBy: '妈妈' }), exp({ id: 'e4', amount: 100, paidBy: '小舅' }),
+    ]);
+    expect(balances.every((b) => b.net === 0)).toBe(true);
+    expect(transfers).toHaveLength(0);
+  });
+
+  it('一人垫付、三人未垫 → 三人各付自己的份额给垫付人', () => {
+    // 总额 400 均摊 → 每人 100;我垫 400 → 我该收 300,其余三人各出 100
+    const { transfers } = computeSettlement(TRIP, [exp({ amount: 400, paidBy: '我' })]);
+    expect(transfers).toHaveLength(3);
+    expect(transfers.every((t) => t.to.name === '我')).toBe(true);
+    expect(transfers.map((t) => t.amount).sort()).toEqual([100, 100, 100]);
+  });
+
+  it('多人多笔 + parts 明细 → 绑定人的份额抬高,差额按实结清', () => {
+    const { balances, transfers } = computeSettlement(TRIP, [
+      exp({ id: 'e1', amount: 400, paidBy: '我' }),   // 均摊:每人 100
+      exp({ id: 'e2', amount: 150, splitMode: 'parts', parts: [{ label: '票', units: 1, unitPrice: 150, memberId: 'b' }] }), // 老张自用的票,无人垫付
+    ]);
+    // 我 +300(垫 400 摊 100) / 老张 −250(没垫但摊了 100+150) / 妈妈 −100 / 小舅 −100
+    expect(balances.map((b) => b.net).sort((x, y) => x - y)).toEqual([-250, -100, -100, 300]);
+    // 老张全额补 250 给我(他的份额全靠自己摊),妈妈/小舅各补 50(他们的 −100 中,50 有对应债权人,其余无)
+    expect(transfers).toEqual([
+      { from: MEMBERS[1], to: MEMBERS[0], amount: 250 },
+      { from: MEMBERS[2], to: MEMBERS[0], amount: 50 },
+    ]);
+    expect(transfers.every((t) => t.amount > 0)).toBe(true);
+  });
+
+  it('剩余差额找不到对应债权人 → 停手,不产生负数/假转账', () => {
+    // 我垫 400、妈妈垫 200;另有 100 谁也没垫(没记出账人)。各家份额 175。
+    const { balances, transfers } = computeSettlement(TRIP, [
+      exp({ id: 'e1', amount: 400, paidBy: '我' }),
+      exp({ id: 'e2', amount: 200, paidBy: '妈妈' }),
+      exp({ id: 'e3', amount: 100 }), // 谁也没掏这 100
+    ]);
+    expect(balances.map((b) => b.net).sort((x, y) => x - y)).toEqual([-175, -175, 25, 225]);
+    expect(transfers.every((t) => t.amount > 0)).toBe(true);
+    // 我净垫 225、妈妈净垫 25,其余两人各欠 175:先把我垫最多的补平,再轮到妈妈
+    expect(transfers.filter((t) => t.to.name === '我')).toEqual([
+      { from: MEMBERS[1], to: MEMBERS[0], amount: 175 },
+      { from: MEMBERS[3], to: MEMBERS[0], amount: 50 },
+    ]);
+    expect(transfers).toHaveLength(3); // 最后一笔:小舅补 25 给妈妈
+    expect(transfers[2]).toEqual({ from: MEMBERS[3], to: MEMBERS[2], amount: 25 });
+  });
+
+  it('出账人姓名不在名单里 → 忽略,不污染结算', () => {
+    const { balances, transfers } = computeSettlement(TRIP, [exp({ amount: 400, paidBy: '路人甲' })]);
+    expect(balances.find((b) => b.member.id === 'a')!.paid).toBe(0);
+    expect(transfers).toHaveLength(0); // 无人垫付 → 无债权人,不凑假转账
+  });
+
+  it('未填出账人 → 只算应分摊,差额为负(没垫过钱)', () => {
+    const { balances } = computeSettlement(TRIP, [exp({ amount: 400 })]);
+    expect(balances.find((b) => b.member.id === 'a')!.paid).toBe(0);
+    expect(balances.find((b) => b.member.id === 'a')!.net).toBe(-100);
+  });
+
+  it('出账人多选:两人一起垫付 → 各记一半,净额按半额轧差', () => {
+    // 400 均摊 4 人 → 每人 100;我和老张一起垫了 400 → 各垫 200
+    const { balances, transfers } = computeSettlement(TRIP, [
+      exp({ id: 'e1', amount: 400, paidByIds: ['a', 'b'] }),
+    ]);
+    const mine = balances.find((b) => b.member.id === 'a')!;
+    const zhang = balances.find((b) => b.member.id === 'b')!;
+    expect(mine.paid).toBe(200);
+    expect(zhang.paid).toBe(200);
+    expect(mine.net).toBe(100); // 该收 100
+    expect(zhang.net).toBe(100);
+    // 妈妈、小舅各欠 100,都转给「垫付人里我俩中垫得最多的那个」
+    expect(transfers.every((t) => t.amount === 100)).toBe(true);
+    expect(transfers).toHaveLength(2);
+  });
+
+  it('出账人多选 + 三人垫付 → 垫付额按人数三等分', () => {
+    const { balances } = computeSettlement(TRIP, [exp({ amount: 600, paidByIds: ['a', 'c', 'd'] })]);
+    expect(balances.find((b) => b.member.id === 'a')!.paid).toBe(200); // 600 / 3
+    expect(balances.find((b) => b.member.id === 'b')!.paid).toBe(0);
+  });
+
+  it('paidByIds 里含已删除成员 → 忽略该 id,其余按均摊', () => {
+    const { balances } = computeSettlement(TRIP, [exp({ amount: 400, paidByIds: ['a', 'deleted'] })]);
+    expect(balances.find((b) => b.member.id === 'a')!.paid).toBe(400); // 只剩一个有效垫付人 → 全额
+  });
+
+  it('paidByIds 为空数组 → 回落 paidBy 姓名文本(旧数据兼容)', () => {
+    const { balances } = computeSettlement(TRIP, [exp({ amount: 400, paidByIds: [], paidBy: '妈妈' })]);
+    expect(balances.find((b) => b.member.id === 'c')!.paid).toBe(400);
+    expect(balances.find((b) => b.member.id === 'a')!.paid).toBe(0);
+  });
+});
+
+describe('payersOf / payerLabel — 垫付人解析', () => {
+  it('优先用 paidByIds,并按名单顺序返回', () => {
+    // 选的顺序是 老张/我,返回顺序仍按名单排 → 我/老张
+    expect(payersOf({ paidByIds: ['b', 'a'] }, MEMBERS).map((m) => m.name)).toEqual(['我', '老张']);
+  });
+  it('paidByIds 缺失/为空 → 回落 paidBy 姓名', () => {
+    expect(payersOf({ paidBy: '妈妈' }, MEMBERS).map((m) => m.name)).toEqual(['妈妈']);
+  });
+  it('paidBy 里手写多个名字(空格/顿号分隔)→ 都能解析', () => {
+    expect(payersOf({ paidBy: '我 老张' }, MEMBERS).map((m) => m.name)).toEqual(['我', '老张']);
+    expect(payersOf({ paidBy: '我、小舅' }, MEMBERS).map((m) => m.name)).toEqual(['我', '小舅']);
+  });
+  it('姓名不在名单 / 未填 → 解析不到人', () => {
+    expect(payersOf({ paidBy: '路人甲' }, MEMBERS)).toHaveLength(0);
+    expect(payersOf({}, MEMBERS)).toHaveLength(0);
+  });
+  it('payerLabel:多人拼成「我/老张」,解析不到时原样回文本', () => {
+    expect(payerLabel({ paidByIds: ['a', 'b'] }, MEMBERS)).toBe('我/老张');
+    expect(payerLabel({ paidBy: '路人甲' }, MEMBERS)).toBe('路人甲');
+    expect(payerLabel({}, MEMBERS)).toBe('');
   });
 });

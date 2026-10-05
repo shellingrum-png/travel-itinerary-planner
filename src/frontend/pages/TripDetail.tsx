@@ -1178,6 +1178,55 @@ export default function TripDetail() {
     }
   };
 
+  // ── 移动端触摸拖拽排序(原生 HTML5 drag 在手机不触发,这里补 touch 手势) ──
+  const [touchDrag, setTouchDrag] = useState<{ itemId: string; fromDayId: string; items: string[]; currentIndex: number } | null>(null);
+  const touchItemEls = useRef<Record<string, HTMLElement | null>>({});
+  const touchStateRef = useRef<{ itemId: string; fromDayId: string; items: string[]; startIndex: number } | null>(null);
+  const touchPosRef = useRef<number>(0);
+  const [moveMenuFor, setMoveMenuFor] = useState<string | null>(null);
+
+  const beginTouchDrag = (itemId: string, fromDayId: string) => (e: React.TouchEvent) => {
+    const items = (daySummaries.find((s) => s.day.id === fromDayId)?.items ?? []).map((it) => it.id);
+    const startIndex = items.indexOf(itemId);
+    touchStateRef.current = { itemId, fromDayId, items, startIndex };
+    touchPosRef.current = startIndex;
+    setTouchDrag({ itemId, fromDayId, items, currentIndex: startIndex });
+    const mv = (ev: TouchEvent) => {
+      ev.preventDefault();
+      const y = ev.touches[0].clientY;
+      const list = touchStateRef.current?.items ?? [];
+      let pos = list.length;
+      for (let i = 0; i < list.length; i++) {
+        const el = touchItemEls.current[list[i]];
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (y < r.top + r.height / 2) { pos = i; break; }
+        pos = i + 1;
+      }
+      touchPosRef.current = pos;
+      setTouchDrag((t) => (t ? { ...t, currentIndex: pos } : t));
+    };
+    const en = async (ev: TouchEvent) => {
+      ev.preventDefault();
+      window.removeEventListener('touchmove', mv);
+      window.removeEventListener('touchend', en);
+      const st = touchStateRef.current;
+      setTouchDrag(null);
+      touchStateRef.current = null;
+      if (!st) return;
+      const pos = touchPosRef.current;
+      const newOrder = pos > st.startIndex ? pos - 1 : pos;
+      try {
+        await db.moveItem(st.fromDayId, st.itemId, newOrder);
+        await load();
+      } catch (err: any) {
+        alert('移动失败: ' + (err?.message || '未知错误'));
+      }
+    };
+    window.addEventListener('touchmove', mv, { passive: false } as AddEventListenerOptions);
+    window.addEventListener('touchend', en, { passive: false } as AddEventListenerOptions);
+  };
+
   /** 保存大交通修改(起抵时间 + 费用) */
   const handleSaveTransportEdit = async (t: Transport, patch: TransportEditPatch) => {
     if (!id) return;
@@ -1484,7 +1533,7 @@ export default function TripDetail() {
           <Link to={`/trip/${trip.id}/overview`} style={toolLink}>概览</Link>
         </div>
 
-        <div style={{ fontSize: 12, color: '#6a6a80', marginBottom: 8 }}>点击某天查看行程 · 拖拽景点可排序或跨天</div>
+        <div style={{ fontSize: 12, color: '#6a6a80', marginBottom: 8 }}>点击某天查看行程 · 桌面拖拽排序 / 手机点「📅移到」可排序或跨天</div>
 
         {days.map((d, i) => {
           const ds = daySummaries.find((s) => s.day.id === d.id);
@@ -1612,9 +1661,13 @@ export default function TripDetail() {
                           const arr = arrivalSegmentFor(ds!.day.id, it);
                           return (
                           <div key={it.id}>
-                            {/* V11 到达本站的路段(带起终点名的连接线) */}
+                            {/* V11 到达本站的路段(带起终点名的连接线,点击打开编辑弹窗修改交通方式) */}
                             {arr.seg && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#8fa8c0', padding: '3px 4px 3px 22px' }}>
+                              <div
+                                onClick={() => openItemEdit(it)}
+                                title="点击修改交通方式/时长"
+                                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#8fa8c0', padding: '3px 4px 3px 22px', cursor: 'pointer', userSelect: 'none', WebkitTapHighlightColor: 'rgba(22,119,255,0.15)' }}
+                              >
                                 <span style={{ color: '#556' }}>↳</span>
                                 {arr.fromName && (
                                   <span style={{ color: '#6b7a8f', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1626,6 +1679,7 @@ export default function TripDetail() {
                               </div>
                             )}
                             <div
+                              ref={(el) => { touchItemEls.current[it.id] = el; }}
                               draggable
                               onDragStart={handleDragStart(it.id, ds!.day.id)}
                               onDragEnd={() => { setDragItem(null); setDragOverDayId(null); }}
@@ -1633,11 +1687,13 @@ export default function TripDetail() {
                                 fontSize: 13, padding: '6px 4px', borderBottom: idx < ds!.items.length - 1 ? '1px solid rgba(255,255,255,0.05)' : 'none',
                                 display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
                                 cursor: 'grab',
-                                background: dragItem?.itemId === it.id ? 'rgba(6,214,160,0.12)' : 'transparent',
+                                opacity: touchDrag?.itemId === it.id ? 0.4 : 1,
+                                background: (dragItem?.itemId === it.id || touchDrag?.itemId === it.id) ? 'rgba(6,214,160,0.12)' : 'transparent',
                                 borderRadius: 6,
+                                borderTop: touchDrag?.fromDayId === ds!.day.id && touchDrag.currentIndex === idx ? '2px dashed #06d6a0' : 'none',
                               }}
                             >
-                              <span style={{ cursor: 'grab', color: '#555', fontSize: 14, userSelect: 'none' }} title="拖拽排序/跨天">⋮⋮</span>
+                              <span style={{ cursor: 'grab', color: '#555', fontSize: 14, userSelect: 'none', touchAction: 'none' }} title="长按此处可拖拽排序/跨天" onTouchStart={beginTouchDrag(it.id, ds!.day.id)}>⋮⋮</span>
                               <div
                                 style={{ flex: 1, overflow: 'hidden', cursor: it.poi ? 'pointer' : 'default' }}
                                 onClick={(e) => { e.stopPropagation(); it.poi && focusPoi(it.id); }}
@@ -1660,11 +1716,34 @@ export default function TripDetail() {
                                   title="删除此节点"
                                   style={{ background: 'rgba(255,0,0,0.15)', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#ff6b6b', cursor: 'pointer' }}
                                 >🗑删除</button>
+                                <button onClick={() => setMoveMenuFor(moveMenuFor === it.id ? null : it.id)} title="移动到其他天" style={{ background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 11, color: '#7ec8ff', cursor: 'pointer' }}>📅移到</button>
                               </div>
                             </div>
+                            {moveMenuFor === it.id && (
+                              <div style={{ marginTop: 6, padding: '8px 10px', background: 'rgba(0,0,0,0.25)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)' }}>
+                                <div style={{ fontSize: 12, color: '#9aa', marginBottom: 6 }}>移动到第几天（自动排到当天末尾）：</div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                  {days.map((dd) => (
+                                    <button
+                                      key={dd.id}
+                                      onClick={async () => {
+                                        const cnt = daySummaries.find((s) => s.day.id === dd.id)?.items.length ?? 0;
+                                        setMoveMenuFor(null);
+                                        try { await db.moveItemAcrossDays(it.id, dd.id, cnt); await load(); }
+                                        catch (err: any) { alert('移动失败: ' + (err?.message || '未知错误')); }
+                                      }}
+                                      style={{ padding: '5px 8px', fontSize: 12, borderRadius: 6, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.06)', color: '#ddd', cursor: 'pointer' }}
+                                    >DAY {dd.daySeq} · {dd.date}</button>
+                                  ))}
+                                </div>
+                                <button onClick={() => setMoveMenuFor(null)} style={{ marginTop: 8, background: 'none', border: 'none', color: '#888', fontSize: 12, cursor: 'pointer' }}>取消</button>
+                              </div>
+                            )}
                           </div>
                           );
-                        })}
+                        })}{touchDrag?.fromDayId === ds!.day.id && touchDrag.currentIndex === ds!.items.length && (
+                          <div style={{ height: 0, borderTop: '2px dashed #06d6a0', margin: '2px 0' }} />
+                        )}
                         {/* 末日:末站 → 返程机场(机场来自大交通记录,单独渲染) */}
                         {(() => {
                           const segs = intraSegs.get(d.id);

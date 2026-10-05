@@ -226,10 +226,10 @@ function ShareMap({ snap, focusDay, airports }: { snap: TripSnapshot; focusDay: 
       .map((d) => ({
         daySeq: d.daySeq,
         pts: s.items
-          .filter((it) => it.dayId === d.id && it.itemType === 'poi' && it.poiId)
+          .filter((it) => it.dayId === d.id && (it.itemType === 'poi' || it.itemType === 'hotel') && it.poiId)
           .sort((a, b) => a.orderSeq - b.orderSeq)
-          .map((it) => poiById.get(it.poiId!))
-          .filter((p): p is Poi => !!p && p.lng !== 0 && p.lat !== 0),
+          .map((it) => ({ poi: poiById.get(it.poiId!), itemType: it.itemType }))
+          .filter((x): x is { poi: Poi; itemType: 'poi' | 'hotel' } => !!x.poi && x.poi.lng !== 0 && x.poi.lat !== 0),
       }))
       .filter((d) => d.pts.length > 0);
 
@@ -237,7 +237,7 @@ function ShareMap({ snap, focusDay, airports }: { snap: TripSnapshot; focusDay: 
     // 统计坐标重叠:同点 marker 自动向下错开,避免叠盖(参照详情页做法)
     const posCount = new Map<string, number>();
     const posDone = new Map<string, number>();
-    dayPts.forEach((d) => d.pts.forEach((p) => {
+    dayPts.forEach((d) => d.pts.forEach(({ poi: p }) => {
       const k = `${p.lng},${p.lat}`;
       posCount.set(k, (posCount.get(k) || 0) + 1);
     }));
@@ -245,7 +245,7 @@ function ShareMap({ snap, focusDay, airports }: { snap: TripSnapshot; focusDay: 
     dayPts.forEach((d, di) => {
       const color = DAY_COLORS[di % DAY_COLORS.length];
       const path: [number, number][] = [];
-      d.pts.forEach((p, i) => {
+      d.pts.forEach(({ poi: p, itemType }, i) => {
         const pos: [number, number] = [p.lng, p.lat];
         path.push(pos);
         all.push(pos);
@@ -254,30 +254,36 @@ function ShareMap({ snap, focusDay, airports }: { snap: TripSnapshot; focusDay: 
         const idx = (posDone.get(k) || 0) + 1;
         posDone.set(k, idx);
         const offset = total > 1 ? new AMap.Pixel(0, idx * 18 - 9) : new AMap.Pixel(-12, -12);
+        const isHotel = itemType === 'hotel';
         const marker = new AMap.Marker({
           position: pos, offset,
-          content: `<div style="width:24px;height:24px;border-radius:50%;background:${color};border:2px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:10px;box-shadow:0 2px 6px rgba(0,0,0,0.6);">${d.daySeq}-${i + 1}</div>`,
+          content: isHotel
+            ? `<div style="width:26px;height:26px;border-radius:50%;background:#9b59b6;border:2px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;box-shadow:0 2px 6px rgba(0,0,0,0.6);">🏨</div>`
+            : `<div style="width:24px;height:24px;border-radius:50%;background:${color};border:2px solid #fff;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:10px;box-shadow:0 2px 6px rgba(0,0,0,0.6);">${d.daySeq}-${i + 1}</div>`,
         });
         marker.on('click', () => {
           new AMap.InfoWindow({
-            content: `<div style="color:#222;font-size:13px;font-weight:700;padding:2px 4px;">Day ${d.daySeq} · ${p.name}</div>`,
+            content: `<div style="color:#222;font-size:13px;font-weight:700;padding:2px 4px;">Day ${d.daySeq}${isHotel ? ' · 🏨' : ''} · ${p.name}</div>`,
             offset: new AMap.Pixel(0, -28),
           }).open(map, pos);
         });
         map.add(marker);
       });
-      if (path.length >= 2) {
+      // 路线只连景点,酒店不强制连入游玩路线(避免酒店折返破坏路线)
+      const poiPath = d.pts.filter((x) => x.itemType === 'poi').map((x) => [x.poi.lng, x.poi.lat] as [number, number]);
+      if (poiPath.length >= 2) {
         map.add(new AMap.Polyline({
-          path, strokeColor: color, strokeWeight: 5, strokeOpacity: 0.85,
+          path: poiPath, strokeColor: color, strokeWeight: 5, strokeOpacity: 0.85,
           lineJoin: 'round', showDir: true,
         }));
       }
     });
 
-    // 跨天虚线:相邻有景点天的末点 → 首点
-    for (let i = 0; i < dayPts.length - 1; i++) {
-      const from = dayPts[i].pts[dayPts[i].pts.length - 1];
-      const to = dayPts[i + 1].pts[0];
+    // 跨天虚线:相邻有景点天的末景点 → 首景点(酒店不参与)
+    const poiDays = dayPts.map((d) => ({ ...d, pts: d.pts.filter((x) => x.itemType === 'poi') })).filter((d) => d.pts.length > 0);
+    for (let i = 0; i < poiDays.length - 1; i++) {
+      const from = poiDays[i].pts[poiDays[i].pts.length - 1].poi;
+      const to = poiDays[i + 1].pts[0].poi;
       map.add(new AMap.Polyline({
         path: [[from.lng, from.lat], [to.lng, to.lat]],
         strokeColor: '#ffffff', strokeWeight: 2, strokeOpacity: 0.4,
@@ -303,8 +309,12 @@ function ShareMap({ snap, focusDay, airports }: { snap: TripSnapshot; focusDay: 
       }));
     };
     if (dayPts.length) {
-      drawAirport(ap.arr, dayPts[0].pts[0], 'in');
-      drawAirport(ap.dep, dayPts[dayPts.length - 1].pts.slice(-1)[0], 'out');
+      // 机场衔接优先用景点点;若当天只有酒店,也允许用酒店点
+      const firstAnchor = dayPts[0].pts.find((x) => x.itemType === 'poi')?.poi ?? dayPts[0].pts[0].poi;
+      const lastDay = dayPts[dayPts.length - 1];
+      const lastAnchor = [...lastDay.pts].reverse().find((x) => x.itemType === 'poi')?.poi ?? lastDay.pts[lastDay.pts.length - 1].poi;
+      drawAirport(ap.arr, firstAnchor, 'in');
+      drawAirport(ap.dep, lastAnchor, 'out');
     }
 
     if (all.length > 0) {
@@ -350,7 +360,7 @@ function ShareMap({ snap, focusDay, airports }: { snap: TripSnapshot; focusDay: 
     const day = s.days.find((d) => d.daySeq === focusDay);
     if (!day) return;
     const pts = s.items
-      .filter((it) => it.dayId === day.id && it.itemType === 'poi' && it.poiId)
+      .filter((it) => it.dayId === day.id && (it.itemType === 'poi' || it.itemType === 'hotel') && it.poiId)
       .sort((a, b) => a.orderSeq - b.orderSeq)
       .map((it) => poiById.get(it.poiId!))
       .filter((p): p is Poi => !!p && p.lng !== 0 && p.lat !== 0);

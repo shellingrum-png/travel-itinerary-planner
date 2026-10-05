@@ -151,6 +151,54 @@ export function participatesIn(expense: Pick<Expense, 'splitMode' | 'parts' | 'p
   return requested.length === 0 || requested.includes(memberId);
 }
 
+/** 某人在这笔账上,由哪几行明细凑出来的钱 */
+export interface ExpenseLine {
+  /** 明细行名称(票种/项目名) */
+  label: string;
+  /** bound=这行就是他的;pool=这行没绑人,由全员均摊后他占一份;even=整笔按人头均摊 */
+  source: 'bound' | 'pool' | 'even';
+  amount: number;
+}
+
+/**
+ * 单笔账在某人名下的逐行来源(口径与 expenseShares 完全一致,含 amount/明细合计 的等比缩放)。
+ * 用于「点开某人 → 看这 ¥X 是哪几行堆的」,方便对账时一眼核对。
+ */
+export function expenseLinesFor(
+  expense: Pick<Expense, 'id' | 'amount' | 'splitMode' | 'parts' | 'participantIds'>,
+  member: TripMember,
+  members: TripMember[],
+): ExpenseLine[] {
+  const amount = Number(expense.amount) || 0;
+  if (amount <= 0 || members.length === 0) return [];
+  const memberIds = new Set(members.map((m) => m.id));
+  const label = (p: { label?: string }) => p.label?.trim() || '明细';
+
+  if (expense.splitMode === 'parts' && expense.parts?.length) {
+    const raw = partsTotal(expense.parts);
+    if (raw > 0) {
+      const scale = amount / raw;
+      const lines: ExpenseLine[] = [];
+      for (const part of expense.parts) {
+        const val = partSubtotal(part) * scale;
+        if (val <= 0) continue;
+        const boundId = part.memberId && memberIds.has(part.memberId) ? part.memberId : undefined;
+        if (boundId === member.id) {
+          lines.push({ label: label(part), source: 'bound', amount: val });
+        } else if (!boundId) {
+          // 没绑人的行:全员均摊,他只占 1/人数
+          lines.push({ label: `${label(part)}(全员均摊)`, source: 'pool', amount: val / members.length });
+        }
+      }
+      return lines;
+    }
+  }
+
+  // even / 兜底:整笔这个人占了 share
+  const val = expenseShares(expense, members).get(member.id) ?? 0;
+  return val > 0 ? [{ label: expense.parts?.[0]?.label?.trim() || '整笔均摊', source: 'even', amount: val }] : [];
+}
+
 /** 汇总每个成员的分摊与参与支出(顺序同 members) */
 export function computeMemberSpend(
   trip: Pick<Trip, 'members' | 'companionCount'> | null | undefined,
@@ -181,6 +229,128 @@ export function computeMemberSpend(
     const e = acc.get(m.id)!;
     return { ...e, share: Math.round(e.share * 100) / 100, spend: Math.round(e.spend * 100) / 100 };
   });
+}
+
+/**
+ * 这笔账的「垫付人」(出账人),支持多人。
+ *
+ * 口径(新数据优先,旧数据兼容):
+ *  - paidByIds(新)有值且能匹配到成员 → 以它为准(多选垫付),顺序按名单排
+ *  - 回落 paidBy 姓名文本:按 空格/逗号/顿号/斜杠 切分成多个名字,逐个匹配成员
+ *    (兼容旧的单选数据,以及「我 老张」这类手写多名字)
+ *  - 匹配不上(自由文本、姓名不在名单里) → 返回 [],该笔不进结算
+ */
+export function payersOf(
+  expense: Pick<Expense, 'paidByIds' | 'paidBy'>,
+  members: TripMember[],
+): TripMember[] {
+  const ids = (expense.paidByIds ?? []).filter((id) => members.some((m) => m.id === id));
+  if (ids.length > 0) return members.filter((m) => ids.includes(m.id));
+
+  const text = (expense.paidBy ?? '').trim();
+  if (!text) return [];
+  const names = new Set(text.split(/[\s,，、;；/&+]+/).filter(Boolean));
+  return members.filter((m) => names.has(m.name));
+}
+
+/** 垫付人展示文案(列表/结算卡片用):「我」「我/老张」;选填为空 → '' */
+export function payerLabel(
+  expense: Pick<Expense, 'paidByIds' | 'paidBy'>,
+  members: TripMember[],
+): string {
+  const names = payersOf(expense, members).map((m) => m.name);
+  return names.length > 0 ? names.join('/') : (expense.paidBy ?? '').trim();
+}
+
+/** 单个成员的结算账本 */
+export interface MemberBalance {
+  member: TripMember;
+  /** 应分摊(该承担的花费) */
+  share: number;
+  /** 已垫付(出账人 = 该成员的所有账的 amount 之和) */
+  paid: number;
+  /** 差额 = 已垫付 − 应分摊。>0 该收钱(净垫付),<0 要出钱(净欠账) */
+  net: number;
+}
+
+/** 一条转账指令:from 转给 to */
+export interface Transfer {
+  from: TripMember;
+  to: TripMember;
+  amount: number;
+}
+
+export interface Settlement {
+  balances: MemberBalance[];
+  /** 最简转账清单(笔数尽量少),按「谁付给谁」给出 */
+  transfers: Transfer[];
+}
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+/** 差额不为 0 才算未平账 */
+const isOpen = (net: number) => Math.abs(net) > 0.004;
+
+/**
+ * 结算账本:应分摊 vs 已垫付 → 谁该收/谁该付,外加最简转账清单。
+ *
+ * 口径说明(重要):
+ *  - share   : 该成员「该承担多少」(按分摊方式算,全员之和 = 总花费)
+ *  - paid    : 该成员「实际垫了多少」(出账人匹配的账,按垫付人数均摊后他占的那份之和)
+ *  - net     : paid − share,正数 = 别人该给他,负数 = 他该给别人
+ *  - 出账人支持多选(几个人一起扫码付):几人共同垫付 → 每人记 amount / n
+ *  - 匹配不上(自由文本、姓名不在名单里) → 不进结算(不影响既有统计)
+ */
+export function computeSettlement(
+  trip: Pick<Trip, 'members' | 'companionCount'> | null | undefined,
+  expenses: Expense[],
+): Settlement {
+  const members = effectiveMembers(trip);
+  const spends = computeMemberSpend(trip, expenses);
+
+  const paidById = new Map<string, number>(members.map((m) => [m.id, 0]));
+  for (const e of expenses) {
+    const payers = payersOf(e, members);
+    const amount = Number(e.amount) || 0;
+    if (payers.length === 0 || amount <= 0) continue; // 没垫付人 / 匹配不上 → 不进结算
+    const per = amount / payers.length; // 多人垫付按人数均摊
+    for (const p of payers) paidById.set(p.id, r2((paidById.get(p.id) ?? 0) + per));
+  }
+
+  const balances: MemberBalance[] = spends.map((s) => {
+    const paid = r2(paidById.get(s.member.id) ?? 0);
+    return { member: s.member, share: s.share, paid, net: r2(paid - s.share) };
+  });
+
+  return { balances, transfers: minCashFlow(balances) };
+}
+
+/**
+ * 最简转账:每轮让「最该付的」付给「最该收的」最小金额,直到全平。
+ * 结果笔数 = 未平人数 − 1(做到尽量少,方便口头对账)。
+ */
+function minCashFlow(balances: MemberBalance[]): Transfer[] {
+  const transfers: Transfer[] = [];
+  const active = balances
+    .filter((b) => isOpen(b.net))
+    .map((b) => ({ member: b.member, net: b.net }));
+
+  // 必须「一边欠、一边收」才轧得下去。若剩下的人全是净垫付或全是净欠账
+  // (例如有笔账压根没记录出账人,多出来的钱谁也没垫),就停下不凑假转账。
+  while (active.some((a) => a.net < -0.004) && active.some((a) => a.net > 0.004)) {
+    active.sort((x, y) => x.net - y.net);
+    const debtor = active[0];   // 最负(该付最多)
+    const creditor = active[active.length - 1]; // 最正(该收最多)
+    const amount = r2(Math.min(-debtor.net, creditor.net));
+    if (amount <= 0) break; // 浮点兜底,防死循环
+    transfers.push({ from: debtor.member, to: creditor.member, amount });
+    debtor.net = r2(debtor.net + amount);
+    creditor.net = r2(creditor.net - amount);
+    for (let i = active.length - 1; i >= 0; i--) {
+      if (!isOpen(active[i].net)) active.splice(i, 1);
+    }
+  }
+  return transfers;
 }
 
 /** 单笔账的分摊摘要文案(列表里展示),UI 与测试共用 */

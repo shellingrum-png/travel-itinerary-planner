@@ -188,7 +188,7 @@ export async function restoreTrip(tripId: string): Promise<Error | null> {
       departAt: t.departAt, arriveAt: t.arriveAt, flightNo: t.flightNo, trainNo: t.trainNo,
     }, t.id);
     for (const e of snap.expenses) await db.addExpense({
-      tripId, category: e.category, amount: e.amount, currency: e.currency, paidBy: e.paidBy,
+      tripId, category: e.category, amount: e.amount, currency: e.currency, paidBy: e.paidBy, paidByIds: e.paidByIds,
       date: e.date, note: e.note, refType: e.refType, refId: e.refId, dayId: e.dayId,
       splitMode: e.splitMode, parts: e.parts, participantIds: e.participantIds,
       ticketCount: e.ticketCount, unitPrice: e.unitPrice, seniorCount: e.seniorCount, seniorPrice: e.seniorPrice,
