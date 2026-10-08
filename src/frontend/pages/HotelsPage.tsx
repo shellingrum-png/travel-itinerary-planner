@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { db } from '../services/db';
 import { loadAMap } from '../services/amapLoader';
+import { NavButton } from '../components/NavMenu';
 import { C, btn, btnGhost, btnSmall, card, input, PageHeader, EmptyState } from '../components/ui';
 import type { Hotel, Trip, ItineraryItem, Expense } from '../types';
 
@@ -273,6 +274,7 @@ export default function HotelsPage() {
                   )}
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+                  {h.lng != null && h.lat != null && <NavButton to={{ name: h.name, lng: h.lng, lat: h.lat }} />}
                   <button onClick={() => handleEdit(h)} style={{ ...btnGhost, ...btnSmall }}>编辑</button>
                   <button onClick={() => handleDelete(h.id)} style={{ ...btnGhost, ...btnSmall, color: C.danger }}>删除</button>
                 </div>

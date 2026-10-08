@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { db } from '../services/db';
 import { useStagedStore } from '../stores/stagedStore';
+import { NavButton } from '../components/NavMenu';
 import { C, btn, btnGhost, btnSmall, card, PageHeader, EmptyState } from '../components/ui';
 import type { ItineraryDay } from '../types';
 
@@ -66,9 +67,12 @@ export default function StagedPage() {
                   {s.address && <div style={{ fontSize: 12, color: '#6a6a80', marginTop: 2 }}>{s.address}</div>}
                   <div style={{ fontSize: 11, color: '#5a5a70', marginTop: 2 }}>坐标: {s.lng.toFixed(4)}, {s.lat.toFixed(4)}</div>
                 </div>
-                <button onClick={() => removeFromStaged(s.id)} style={{ ...btnGhost, ...btnSmall, color: C.danger, flexShrink: 0 }}>
-                  移除
-                </button>
+                <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+                  <NavButton to={{ name: s.name, lng: s.lng, lat: s.lat }} />
+                  <button onClick={() => removeFromStaged(s.id)} style={{ ...btnGhost, ...btnSmall, color: C.danger, flexShrink: 0 }}>
+                    移除
+                  </button>
+                </div>
               </div>
               {dayForItem(s.id) ? (
                 <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap' }}>

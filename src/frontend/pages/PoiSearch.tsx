@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import MapView from '../components/MapView';
 import type { MarkerDef } from '../components/MapView';
+import { NavButton } from '../components/NavMenu';
 import { useStagedStore } from '../stores/stagedStore';
 import { getAccessToken } from '../services/auth';
 import { C, btn, btnGhost, btnSmall, card, input, PageHeader, EmptyState } from '../components/ui';
@@ -139,6 +140,7 @@ export default function PoiSearch() {
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                 <strong style={{ fontSize: 13 }}>{r.name}</strong>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                  <NavButton to={{ name: r.name, lng: r.lng, lat: r.lat }} style={{ fontSize: 12, padding: '1px 8px' }} />
                   <Link
                     to={`/trip/${tripId}/poi?poiId=${r.id}&name=${encodeURIComponent(r.name)}&lng=${r.lng}&lat=${r.lat}&addr=${encodeURIComponent(r.address)}&city=${encodeURIComponent(city)}`}
                     onClick={(e) => e.stopPropagation()}

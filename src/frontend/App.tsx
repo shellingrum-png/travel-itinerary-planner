@@ -15,6 +15,7 @@ import ShareView from './pages/ShareView';
 import AuthPage from './pages/AuthPage';
 import { onAuthStateChange, isAuthConfigured } from './services/auth';
 import { setActiveDb, migrateLegacyDb } from './services/db';
+import { NavProvider } from './components/NavMenu';
 
 export default function App() {
   const [user, setUser] = useState<{ id: string; email?: string } | null>(null);
@@ -86,7 +87,7 @@ export default function App() {
   const showApp = !isAuthConfigured() || user;
 
   return (
-    <>
+    <NavProvider>
       {syncError && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9998,
@@ -125,6 +126,6 @@ export default function App() {
           <Route path="/trip/:id/overview" element={<TripOverviewPage />} />
         </Routes>
       )}
-    </>
+    </NavProvider>
   );
 }

@@ -3,6 +3,7 @@ import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { db } from '../services/db';
 import { getPoiCard } from '../services/llm';
 import { useStagedStore } from '../stores/stagedStore';
+import { NavButton } from '../components/NavMenu';
 import type { Poi, PoiAiCard } from '../types';
 
 export default function PoiDetail() {
@@ -65,6 +66,7 @@ export default function PoiDetail() {
 
       {/* 操作按钮 */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        <NavButton to={{ name: poi.name, lng: poi.lng, lat: poi.lat }} label="导航" style={{ padding: '8px 16px', fontSize: 14 }} />
         <button
           onClick={() => {
             addToStaged({

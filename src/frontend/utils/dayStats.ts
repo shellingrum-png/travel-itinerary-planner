@@ -17,6 +17,9 @@ export function routeCacheKey(lng1: number, lat1: number, lng2: number, lat2: nu
 export interface DayPoi {
   name: string;
   category: string;
+  /** 坐标(概览页「导航」用);缺失或无坐标时不可导航 */
+  lng?: number;
+  lat?: number;
 }
 
 export interface DayStats {
@@ -90,7 +93,7 @@ export function computeTripOverview(input: OverviewInput): TripOverview {
       for (const it of items) {
         if (it.itemType !== 'poi') continue;
         const poi = it.poiId ? poiById.get(it.poiId) : undefined;
-        if (poi) dayPois.push({ name: poi.name, category: poi.category || 'poi' });
+        if (poi) dayPois.push({ name: poi.name, category: poi.category || 'poi', lng: poi.lng, lat: poi.lat });
       }
 
       // ── 每天开车公里:顺序遍历带坐标节点(poi),相邻 drive 段求和 ──

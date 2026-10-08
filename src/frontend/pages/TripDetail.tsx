@@ -18,6 +18,7 @@ import MemberModal from '../components/MemberModal';
 import ShareModal from '../components/ShareModal';
 import TransportEditModal, { type TransportEditPatch } from '../components/TransportEditModal';
 import TicketFields, { emptyTicketFields, type TicketFieldsValue } from '../components/TicketFields';
+import { NavButton } from '../components/NavMenu';
 import { C } from '../components/ui';
 import { modeIcon, fmtDT, dayTransports, isBigTransportMode } from '../utils/transportFormat';
 import { buildItemPatch, ticketAction } from '../utils/itemEdit';
@@ -538,6 +539,29 @@ export default function TripDetail() {
     const prev = dayIdx > 0 ? daySummaries[dayIdx - 1] : null;
     const prevLast = prev?.items.filter((x) => x.poi && x.poi.lng !== 0 && x.poi.lat !== 0).pop();
     return { seg, fromName: prevLast?.poi?.name ?? null, crossDay: true };
+  };
+
+  /**
+   * 本站的「上一站」(带坐标)—— 导航起点用。
+   * 同天前一个带坐标的点;当天首点则取前一天最后一个带坐标的点(含机场)。
+   */
+  const prevPointFor = (dayId: string, itemId: string): { name: string; lng: number; lat: number } | undefined => {
+    const ds = daySummaries.find((s) => s.day.id === dayId);
+    if (!ds) return undefined;
+    const withPoi = ds.items.filter((x) => x.poi && x.poi.lng !== 0 && x.poi.lat !== 0);
+    const pos = withPoi.findIndex((x) => x.id === itemId);
+    if (pos < 0) return undefined;
+    const pick = (it?: (ItineraryItem & { poi?: Poi })) =>
+      it?.poi ? { name: it.poi.name, lng: it.poi.lng, lat: it.poi.lat } : undefined;
+    if (pos > 0) return pick(withPoi[pos - 1]);
+    const dayIdx = daySummaries.findIndex((s) => s.day.id === dayId);
+    if (dayIdx === 0) {
+      // 全行程首站:起点取「到达机场」(与分享页口径一致)
+      return airports.arr ? { name: airports.arr.name, lng: airports.arr.lng, lat: airports.arr.lat } : undefined;
+    }
+    const prev = daySummaries[dayIdx - 1];
+    const prevLast = prev?.items.filter((x) => x.poi && x.poi.lng !== 0 && x.poi.lat !== 0).pop();
+    return pick(prevLast);
   };
 
   // V6.2 交通方式 → 预估速度(km/h),用于时长粗算
@@ -1706,6 +1730,7 @@ export default function TripDetail() {
                                 {it.itemType === 'transport' && <span style={{ color: '#ffa07a', fontSize: 11, marginLeft: 4 }}>🚗</span>}
                               </div>
                               <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
+                                <NavButton to={it.poi} from={prevPointFor(ds!.day.id, it.id)} style={{ padding: '2px 8px', fontSize: 11 }} />
                                 <button
                                   onClick={() => openItemEdit(it)}
                                   title="修改名称/时长/门票/费用/更换景点"

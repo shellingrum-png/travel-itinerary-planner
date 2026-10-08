@@ -6,6 +6,7 @@ import { computeCrossDayDrive } from '../utils/crossDay';
 import { getDuration } from '../services/amap';
 import type { Trip, ItineraryDay, ItineraryItem, Poi, Hotel, Expense, Transport, RouteCache } from '../types';
 import { C, card } from '../components/ui';
+import { NavButton } from '../components/NavMenu';
 
 const CATEGORY_LABEL: Record<string, string> = {
   transport: '大交通',
@@ -124,7 +125,7 @@ export default function TripOverviewPage() {
       {overview.dayStats.length === 0 ? (
         <p style={{ color: '#9a9ab0' }}>暂无日期数据</p>
       ) : (
-        overview.dayStats.map((d) => (
+        overview.dayStats.map((d, di) => (
           <div key={d.daySeq} style={{ ...card, marginBottom: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <strong style={{ fontSize: 15 }}>Day {d.daySeq} · {d.date}</strong>
@@ -137,14 +138,25 @@ export default function TripOverviewPage() {
             </div>
             {d.pois.length > 0 ? (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {d.pois.map((p, i) => (
+                {d.pois.map((p, i) => {
+                  // 上一站:同天前一个;当天首个则取前一天最后一个有坐标的点
+                  const prevDay = di > 0 ? overview.dayStats[di - 1].pois : undefined;
+                  const prev = i > 0 ? d.pois[i - 1] : prevDay?.[prevDay.length - 1];
+                  const from = prev && prev.lng != null && prev.lat != null
+                    ? { name: prev.name, lng: prev.lng, lat: prev.lat } : undefined;
+                  return (
                   <span key={i} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
                     fontSize: 12, color: '#e8e8f0', background: 'rgba(255,255,255,0.07)',
                     border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '2px 8px',
                   }}>
                     {p.name}
+                    {p.lng != null && p.lat != null && (
+                      <NavButton to={{ name: p.name, lng: p.lng, lat: p.lat }} from={from} style={{ fontSize: 11, padding: '0 6px', border: 'none', textDecoration: 'underline' }} />
+                    )}
                   </span>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <span style={{ fontSize: 13, color: '#9a9ab0' }}>当日无景点排点</span>

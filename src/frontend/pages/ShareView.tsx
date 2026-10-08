@@ -19,6 +19,7 @@ import { snapshotToOverview } from '../utils/shareView';
 import type { TripOverview, DayStats } from '../utils/dayStats';
 import type { TransportMode, Poi, RouteCache } from '../types';
 import { C, card } from '../components/ui';
+import { NavButton } from '../components/NavMenu';
 
 const CATEGORY_LABEL: Record<string, string> = {
   transport: '大交通',
@@ -37,11 +38,6 @@ const DAY_COLORS = [
   '#ff6b6b', '#ffd166', '#06d6a0', '#118ab2', '#ef476f',
   '#073b4c', '#f77f00', '#8338ec', '#3a86ff', '#ff006e',
 ];
-
-/** 高德导航 URI:手机上点开会唤起高德 App 导航到该点 */
-function navUrl(p: Poi): string {
-  return `https://uri.amap.com/navigation?to=${p.lng},${p.lat},${encodeURIComponent(p.name)}&mode=car&coordinate=gaode&src=travel-share`;
-}
 
 export default function ShareView() {
   const { token } = useParams<{ token: string }>();
@@ -428,6 +424,23 @@ function DayCard({
     if (seg) arrivalByItemId.set(p.id, seg);
   });
 
+  // 「上一站」= 本站的前一个有序点(同天前一点;当天首点则接前一天末点),
+  // 用于导航时把起点设为上一站(否则各 App 会从"当前定位"出发)。
+  const sortedDays = [...snap.days].sort((a, b) => a.daySeq - b.daySeq);
+  const prevTargetFor = (itemId: string): { name: string; lng: number; lat: number } | undefined => {
+    const k = points.findIndex((p) => p.id === itemId);
+    if (k < 0) return undefined;
+    const pt = k > 0
+      ? points[k - 1]
+      // 当天首点 → 前一天最后一个有坐标的点
+      : (() => {
+          const di = sortedDays.findIndex((x) => x.id === dayRecord?.id);
+          const prevPts = di > 0 ? segData.pointsByDay.get(sortedDays[di - 1].id) : undefined;
+          return prevPts?.[prevPts.length - 1];
+        })();
+    return pt ? { name: pt.name, lng: pt.lng, lat: pt.lat } : undefined;
+  };
+
   const dayFlights = dayTransports(snap.transports, day.date);
 
   const toggle = () => { setOpen((v) => !v); onFocus(); };
@@ -505,7 +518,7 @@ function DayCard({
             else if (it.itemType === 'hotel') label = '🏨 ' + (it.note || poi?.name || '住宿');
             else if (it.itemType === 'transport') label = '🚗 ' + (MODE_LABELS[it.transportMode] || it.transportMode);
             else label = it.note || '缓冲';
-            const canNav = it.itemType === 'poi' && poi && poi.lng !== 0 && poi.lat !== 0;
+            const canNav = (it.itemType === 'poi' || it.itemType === 'hotel') && poi && poi.lng !== 0 && poi.lat !== 0;
             const arrSeg = arrivalByItemId.get(it.id);
             return (
               <div key={i}>
@@ -519,20 +532,7 @@ function DayCard({
                 <div style={{ display: 'flex', gap: 10, fontSize: 13, alignItems: 'baseline' }}>
                   {hasTime && <span style={{ width: 88, color: '#7eb8e0', fontSize: 12, flexShrink: 0 }}>{time}</span>}
                   <span style={{ color: '#e8e8f0', flex: 1 }}>{label}</span>
-                  {canNav && (
-                    <a
-                      href={navUrl(poi!)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      style={{
-                        flexShrink: 0, fontSize: 12, color: C.primary, textDecoration: 'none',
-                        border: `1px solid ${C.primary}`, borderRadius: 6, padding: '1px 8px',
-                      }}
-                    >
-                      导航
-                    </a>
-                  )}
+                  {canNav && <NavButton to={poi!} from={prevTargetFor(it.id)} />}
                 </div>
               </div>
             );
